@@ -1,22 +1,13 @@
 package com.nudroidlabs.nubrowse;
 
-import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.DownloadManager;
-import android.content.ClipData;
-import android.content.ClipboardManager;
-import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.text.Editable;
 import android.view.Gravity;
 import android.view.InputDevice;
@@ -28,13 +19,10 @@ import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
 import android.webkit.JsResult;
-import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
-import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -52,25 +40,17 @@ import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class MainActivity extends Activity {
 
     private static final String HOME_URL = "https://www.google.com/";
-    private static final String UA_TV = "Mozilla/5.0 (Linux; Android 14; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 NuBrowseTV/3.0";
+    private static final String UA_TV = "Mozilla/5.0 (Linux; Android 14; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 NuBrowseTV/2.0";
     private static final String UA_DESKTOP = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     private static final String UA_MOBILE = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
     private static final String PREFS = "nubrowse_m2";
     private static final String KEY_BOOKMARKS = "bookmarks";
     private static final String KEY_HISTORY = "history";
-    private static final String KEY_ADBLOCK = "adblock";
-    private static final String KEY_POPUP_BLOCK = "popup_block";
-    private static final String KEY_THIRD_PARTY_COOKIES = "third_party_cookies";
-    private static final String KEY_UA = "user_agent";
-    private static final String KEY_DEV_MODE = "dev_mode";
-    private static final String KEY_PAGE_SCALE = "page_scale";
     private static final int MAX_HISTORY = 50;
-    private static final int REQUEST_WRITE_STORAGE = 130;
 
     private WebView webView;
     private EditText addressBar;
@@ -84,21 +64,9 @@ public class MainActivity extends Activity {
     private View lastContentFocus;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private SharedPreferences prefs;
-
     private boolean adBlockEnabled = true;
-    private boolean popupBlockEnabled = true;
-    private boolean thirdPartyCookiesEnabled = true;
     private boolean keyboardNumbers = false;
-    private boolean devModeEnabled = true;
-    private int pageScalePercent = 85;
     private String uaMode = "TV";
-    private final AtomicInteger blockedRequests = new AtomicInteger(0);
-    private volatile String currentPageUrl = HOME_URL;
-
-    private String pendingDownloadUrl;
-    private String pendingDownloadUserAgent;
-    private String pendingDownloadDisposition;
-    private String pendingDownloadMime;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -106,17 +74,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        NuBrowseApp.markPhase(this, "activity_start");
-
-        String lastCrash = NuBrowseApp.getLastCrash(this);
-        if (lastCrash != null && !lastCrash.trim().isEmpty()) {
-            showCrashRecovery(lastCrash);
-            return;
-        }
-
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        loadSettings();
-        NuBrowseApp.markPhase(this, "building_ui");
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(16, 16, 16));
@@ -129,15 +87,16 @@ public class MainActivity extends Activity {
         LinearLayout toolbar = new LinearLayout(this);
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(5), dp(3), dp(5), dp(3));
+        toolbar.setPadding(dp(8), dp(6), dp(8), dp(6));
         toolbar.setBackgroundColor(Color.rgb(24, 24, 24));
-        page.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        page.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)));
 
         Button back = button("←");
         Button forward = button("→");
         Button home = button("⌂");
         Button refresh = button("↻");
         Button bookmark = button("★");
+        Button remote = button("RMT");
         Button menu = button("⋮");
 
         addressBar = new EditText(this);
@@ -145,8 +104,8 @@ public class MainActivity extends Activity {
         addressBar.setTextColor(Color.WHITE);
         addressBar.setHintTextColor(Color.LTGRAY);
         addressBar.setHint("Search or enter URL");
-        addressBar.setTextSize(15);
-        addressBar.setPadding(dp(10), 0, dp(10), 0);
+        addressBar.setTextSize(18);
+        addressBar.setPadding(dp(14), 0, dp(14), 0);
         addressBar.setBackgroundResource(R.drawable.address_bg);
         addressBar.setImeOptions(EditorInfo.IME_ACTION_GO);
         addressBar.setSelectAllOnFocus(true);
@@ -156,22 +115,22 @@ public class MainActivity extends Activity {
 
         Button go = button("GO");
 
-        toolbar.addView(back, fixed(dp(42)));
-        toolbar.addView(forward, fixed(dp(42)));
-        toolbar.addView(home, fixed(dp(42)));
-        toolbar.addView(refresh, fixed(dp(42)));
-        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(38), 1f);
-        addressParams.setMargins(dp(4), 0, dp(4), 0);
+        toolbar.addView(back, fixed(dp(50)));
+        toolbar.addView(forward, fixed(dp(50)));
+        toolbar.addView(home, fixed(dp(50)));
+        toolbar.addView(refresh, fixed(dp(50)));
+        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        addressParams.setMargins(dp(6), 0, dp(6), 0);
         toolbar.addView(addressBar, addressParams);
-        toolbar.addView(go, fixed(dp(52)));
-        toolbar.addView(bookmark, fixed(dp(42)));
-        toolbar.addView(menu, fixed(dp(42)));
+        toolbar.addView(go, fixed(dp(62)));
+        toolbar.addView(bookmark, fixed(dp(50)));
+        toolbar.addView(remote, fixed(dp(66)));
+        toolbar.addView(menu, fixed(dp(50)));
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progressBar.setMax(100);
-        page.addView(progressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+        page.addView(progressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)));
 
-        NuBrowseApp.markPhase(this, "creating_webview");
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
         webView.setFocusable(true);
@@ -179,7 +138,6 @@ public class MainActivity extends Activity {
         page.addView(webView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         configureWebView();
-        NuBrowseApp.markPhase(this, "webview_configured");
 
         back.setOnClickListener(v -> browserBack());
         forward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
@@ -187,7 +145,7 @@ public class MainActivity extends Activity {
         refresh.setOnClickListener(v -> webView.reload());
         go.setOnClickListener(v -> submitAddress());
         bookmark.setOnClickListener(v -> toggleBookmark());
-        bookmark.setOnLongClickListener(v -> { showSavedList(KEY_BOOKMARKS, "Bookmarks"); return true; });
+        remote.setOnClickListener(v -> showTestRemote());
         menu.setOnClickListener(v -> showSettings());
 
         addressBar.setOnClickListener(v -> showTvKeyboard());
@@ -199,95 +157,12 @@ public class MainActivity extends Activity {
             return false;
         });
 
-        NuBrowseApp.markPhase(this, "loading_initial_page");
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
         } else {
-            currentPageUrl = HOME_URL;
             webView.loadUrl(HOME_URL);
         }
         addressBar.requestFocus();
-        NuBrowseApp.markPhase(this, "running");
-    }
-
-    private void showCrashRecovery(String report) {
-        FrameLayout crashRoot = new FrameLayout(this);
-        crashRoot.setBackgroundColor(Color.rgb(16, 16, 16));
-        setContentView(crashRoot);
-
-        LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(dp(22), dp(18), dp(22), dp(18));
-        crashRoot.addView(body, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        TextView title = new TextView(this);
-        title.setText("NuBrowse recovered a runtime crash");
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(22);
-        body.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
-
-        TextView hint = new TextView(this);
-        hint.setText("Copy this short diagnose and send it back. Normal browser startup is paused so the crash does not loop.");
-        hint.setTextColor(Color.LTGRAY);
-        hint.setTextSize(14);
-        body.addView(hint, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
-
-        TextView details = new TextView(this);
-        details.setText(report);
-        details.setTextColor(Color.WHITE);
-        details.setTextSize(13);
-        details.setTextIsSelectable(true);
-        details.setPadding(dp(12), dp(10), dp(12), dp(10));
-        body.addView(details, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER);
-        body.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)));
-
-        Button copy = button("COPY DIAGNOSE");
-        Button retry = button("CLEAR + TRY AGAIN");
-        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, dp(52), 1f);
-        copyParams.setMargins(dp(6), dp(6), dp(6), dp(6));
-        LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(0, dp(52), 1f);
-        retryParams.setMargins(dp(6), dp(6), dp(6), dp(6));
-        actions.addView(copy, copyParams);
-        actions.addView(retry, retryParams);
-
-        copy.setOnClickListener(v -> {
-            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText("NuBrowse runtime diagnose", report));
-                Toast.makeText(this, "Diagnose copied", Toast.LENGTH_SHORT).show();
-            }
-        });
-        retry.setOnClickListener(v -> {
-            NuBrowseApp.clearLastCrash(this);
-            recreate();
-        });
-        copy.requestFocus();
-    }
-
-    private void loadSettings() {
-        adBlockEnabled = prefs.getBoolean(KEY_ADBLOCK, true);
-        popupBlockEnabled = prefs.getBoolean(KEY_POPUP_BLOCK, true);
-        thirdPartyCookiesEnabled = prefs.getBoolean(KEY_THIRD_PARTY_COOKIES, true);
-        devModeEnabled = prefs.getBoolean(KEY_DEV_MODE, true);
-        pageScalePercent = prefs.getInt(KEY_PAGE_SCALE, 85);
-        if (pageScalePercent != 85 && pageScalePercent != 100) pageScalePercent = 85;
-        uaMode = prefs.getString(KEY_UA, "TV");
-        if (uaMode == null) uaMode = "TV";
-    }
-
-    private void saveSettings() {
-        prefs.edit()
-                .putBoolean(KEY_ADBLOCK, adBlockEnabled)
-                .putBoolean(KEY_POPUP_BLOCK, popupBlockEnabled)
-                .putBoolean(KEY_THIRD_PARTY_COOKIES, thirdPartyCookiesEnabled)
-                .putBoolean(KEY_DEV_MODE, devModeEnabled)
-                .putInt(KEY_PAGE_SCALE, pageScalePercent)
-                .putString(KEY_UA, uaMode)
-                .apply();
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -298,25 +173,19 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setLoadsImagesAutomatically(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setSupportMultipleWindows(true);
-        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        settings.setSupportMultipleWindows(false);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-        applyUserAgent();
+        settings.setUserAgentString(UA_TV);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
-        settings.setSupportZoom(true);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
-        settings.setTextZoom(pageScalePercent);
-        webView.setInitialScale(pageScalePercent);
 
         CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, thirdPartyCookiesEnabled);
-
-        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
-                startDownload(url, userAgent, contentDisposition, mimeType));
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -330,37 +199,21 @@ public class MainActivity extends Activity {
 
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                String requestUrl = request.getUrl().toString();
-                String pageUrl = currentPageUrl;
-                if (adBlockEnabled && AdBlocker.shouldBlock(requestUrl, pageUrl)) {
-                    blockedRequests.incrementAndGet();
-                    return emptyResponse();
-                }
+                if (adBlockEnabled && AdBlocker.shouldBlock(request.getUrl().toString())) return emptyResponse();
                 return super.shouldInterceptRequest(view, request);
             }
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                if (url != null && !url.isEmpty()) currentPageUrl = url;
                 addressBar.setText(url);
                 progressBar.setVisibility(View.VISIBLE);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (url != null && !url.isEmpty()) currentPageUrl = url;
                 addressBar.setText(url);
                 recordHistory(url, view.getTitle());
-                injectTvViewportTuning();
                 injectCosmeticAdCleanup();
-            }
-
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) {
-                    progressBar.setVisibility(View.GONE);
-                    Toast.makeText(MainActivity.this, "Page failed to load", Toast.LENGTH_SHORT).show();
-                }
             }
         });
 
@@ -373,42 +226,8 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, android.os.Message resultMsg) {
-                if (popupBlockEnabled && !isUserGesture) {
-                    Toast.makeText(MainActivity.this, "Popup blocked", Toast.LENGTH_SHORT).show();
-                    return false;
-                }
-                WebView popup = new WebView(MainActivity.this);
-                popup.setVisibility(View.INVISIBLE);
-                root.addView(popup, new FrameLayout.LayoutParams(1, 1));
-                popup.getSettings().setJavaScriptEnabled(true);
-                popup.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public boolean shouldOverrideUrlLoading(WebView child, WebResourceRequest request) {
-                        String url = request.getUrl().toString();
-                        root.removeView(child);
-                        child.destroy();
-                        hideTvKeyboard();
-                        webView.loadUrl(url);
-                        webView.requestFocus();
-                        return true;
-                    }
-
-                    @Override
-                    public void onPageStarted(WebView child, String url, Bitmap favicon) {
-                        if (url != null && !"about:blank".equals(url)) {
-                            child.stopLoading();
-                            root.removeView(child);
-                            child.destroy();
-                            hideTvKeyboard();
-                            webView.loadUrl(url);
-                            webView.requestFocus();
-                        }
-                    }
-                });
-                WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
-                transport.setWebView(popup);
-                resultMsg.sendToTarget();
-                return true;
+                Toast.makeText(MainActivity.this, "Popup blocked", Toast.LENGTH_SHORT).show();
+                return false;
             }
 
             @Override
@@ -435,8 +254,6 @@ public class MainActivity extends Activity {
                 fullscreenContainer.setBackgroundColor(Color.BLACK);
                 fullscreenContainer.addView(view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                 root.addView(fullscreenContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                enterImmersiveMode();
                 fullscreenContainer.requestFocus();
                 if (remoteOverlay != null) remoteOverlay.bringToFront();
             }
@@ -449,26 +266,14 @@ public class MainActivity extends Activity {
     }
 
     private WebResourceResponse emptyResponse() {
-        return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
-    }
-
-    private void injectTvViewportTuning() {
-        String js = "javascript:(function(){" +
-                "try{" +
-                "var v=document.querySelector('meta[name=viewport]');" +
-                "if(!v){v=document.createElement('meta');v.name='viewport';" +
-                "v.setAttribute('content','width=device-width, initial-scale=1.0, viewport-fit=cover');" +
-                "document.head.appendChild(v);}" +
-                "}catch(e){}" +
-                "})()";
-        webView.evaluateJavascript(js, null);
+        return new WebResourceResponse("text/plain", "UTF-8", 204, "No Content", null, new ByteArrayInputStream(new byte[0]));
     }
 
     private void injectCosmeticAdCleanup() {
         if (!adBlockEnabled) return;
         String js = "javascript:(function(){" +
-                "var s=['iframe[src*=\\\"ad\\\"]','iframe[id*=\\\"ad\\\"]','[id^=\\\"ad-\\\"]','[id^=\\\"ads-\\\"]','[class^=\\\"ad-\\\"]','[class*=\\\" ad-\\\"]','[class^=\\\"ads-\\\"]','[class*=\\\" ads-\\\"]','[aria-label*=\\\"advertisement\\\" i]'];" +
-                "s.forEach(function(q){document.querySelectorAll(q).forEach(function(e){e.style.setProperty('display','none','important');});});" +
+                "var s=['iframe[src*=\\\"ad\\\"]','[id^=\\\"ad-\\\"]','[class^=\\\"ad-\\\"]','[class*=\\\" ad-\\\"]','[aria-label*=\\\"advertisement\\\" i]'];" +
+                "s.forEach(function(q){document.querySelectorAll(q).forEach(function(e){e.style.display='none';});});" +
                 "})()";
         webView.evaluateJavascript(js, null);
     }
@@ -571,14 +376,34 @@ public class MainActivity extends Activity {
 
     private void handleKeyboardKey(String key) {
         switch (key) {
-            case "123": keyboardNumbers = true; rebuildKeyboard(); break;
-            case "ABC": keyboardNumbers = false; rebuildKeyboard(); break;
-            case "SPACE": replaceSelection(" "); break;
-            case "⌫": backspaceAddress(); break;
-            case "CLEAR": addressBar.setText(""); addressBar.setSelection(0); break;
-            case "GO": submitAddress(); break;
-            case "CLOSE": hideTvKeyboard(); addressBar.requestFocus(); break;
-            default: replaceSelection(key); break;
+            case "123":
+                keyboardNumbers = true;
+                rebuildKeyboard();
+                break;
+            case "ABC":
+                keyboardNumbers = false;
+                rebuildKeyboard();
+                break;
+            case "SPACE":
+                replaceSelection(" ");
+                break;
+            case "⌫":
+                backspaceAddress();
+                break;
+            case "CLEAR":
+                addressBar.setText("");
+                addressBar.setSelection(0);
+                break;
+            case "GO":
+                submitAddress();
+                break;
+            case "CLOSE":
+                hideTvKeyboard();
+                addressBar.requestFocus();
+                break;
+            default:
+                replaceSelection(key);
+                break;
         }
     }
 
@@ -621,10 +446,6 @@ public class MainActivity extends Activity {
     }
 
     private void showTestRemote() {
-        if (!devModeEnabled) {
-            Toast.makeText(this, "Dev Mode is OFF", Toast.LENGTH_SHORT).show();
-            return;
-        }
         if (remoteOverlay != null) return;
         lastContentFocus = getCurrentFocus();
         if (lastContentFocus == null) lastContentFocus = webView;
@@ -634,9 +455,8 @@ public class MainActivity extends Activity {
         remoteOverlay.setFocusableInTouchMode(false);
         root.addView(remoteOverlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // Transparent touch shield: the page remains visible but direct touch is locked.
         View shield = new View(this);
-        shield.setBackgroundColor(Color.TRANSPARENT);
+        shield.setBackgroundColor(Color.argb(70, 0, 0, 0));
         shield.setClickable(true);
         shield.setFocusable(false);
         shield.setOnTouchListener((v, event) -> true);
@@ -645,19 +465,18 @@ public class MainActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setGravity(Gravity.CENTER);
-        panel.setPadding(dp(9), dp(8), dp(9), dp(9));
+        panel.setPadding(dp(14), dp(14), dp(14), dp(14));
         panel.setBackgroundResource(R.drawable.remote_bg);
-        panel.setAlpha(0.82f);
-        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(dp(196), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.BOTTOM);
-        panelParams.setMargins(dp(10), dp(10), dp(12), dp(12));
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.CENTER_VERTICAL);
+        panelParams.setMargins(0, dp(8), dp(16), dp(8));
         remoteOverlay.addView(panel, panelParams);
 
         TextView title = new TextView(this);
-        title.setText("DEV REMOTE");
+        title.setText("TEST REMOTE\nTouch locked");
         title.setTextColor(Color.WHITE);
         title.setGravity(Gravity.CENTER);
-        title.setTextSize(11);
-        panel.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(24)));
+        title.setTextSize(14);
+        panel.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
 
         panel.addView(remoteRow("", "▲", ""));
         panel.addView(remoteRow("◀", "OK", "▶"));
@@ -672,7 +491,8 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER);
-        row.setPadding(0, dp(2), 0, dp(2));
+        row.setPadding(0, dp(3), 0, dp(3));
+
         addRemoteCell(row, left);
         addRemoteCell(row, centre);
         addRemoteCell(row, right);
@@ -682,19 +502,16 @@ public class MainActivity extends Activity {
     private void addRemoteCell(LinearLayout row, String label) {
         if (label.isEmpty()) {
             View spacer = new View(this);
-            row.addView(spacer, new LinearLayout.LayoutParams(0, dp(40), 1f));
+            row.addView(spacer, new LinearLayout.LayoutParams(0, dp(52), 1f));
             return;
         }
         Button b = button(label);
         b.setFocusable(false);
         b.setFocusableInTouchMode(false);
-        b.setTextSize(label.length() > 3 ? 9 : 14);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
-        b.setPadding(dp(2), 0, dp(2), 0);
+        b.setTextSize(label.length() > 3 ? 12 : 16);
         b.setOnClickListener(v -> handleRemoteButton(label));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(40), 1f);
-        p.setMargins(dp(2), 0, dp(2), 0);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(52), 1f);
+        p.setMargins(dp(3), 0, dp(3), 0);
         row.addView(b, p);
     }
 
@@ -828,65 +645,29 @@ public class MainActivity extends Activity {
     }
 
     private void showSettings() {
-        String blocker = "Ad blocker: " + (adBlockEnabled ? "ON" : "OFF") + "  •  blocked " + blockedRequests.get();
-        String popup = "Popup blocker: " + (popupBlockEnabled ? "ON" : "OFF");
-        String cookies = "Third-party cookies: " + (thirdPartyCookiesEnabled ? "ON" : "OFF");
-        String dev = "Dev Mode: " + (devModeEnabled ? "ON" : "OFF");
-        String remote = !devModeEnabled ? "Dev remote: unavailable" : (remoteOverlay == null ? "Open dev remote" : "Close dev remote");
-        String scale = "Page scale: " + pageScalePercent + "%" + (pageScalePercent == 85 ? " (TV compact)" : "");
+        String blocker = adBlockEnabled ? "Ad blocker: ON" : "Ad blocker: OFF";
         String[] items = {
                 "Bookmarks",
                 "History",
-                "Downloads",
-                dev,
-                remote,
-                scale,
+                remoteOverlay == null ? "Open test remote" : "Close test remote",
                 blocker,
-                popup,
-                cookies,
                 "User agent: " + uaMode,
                 "Clear browsing data",
-                "About NuBrowse M4"
+                "About NuBrowse M2"
         };
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M4")
+                .setTitle("NuBrowse M2")
                 .setItems(items, (dialog, which) -> {
                     if (which == 0) showSavedList(KEY_BOOKMARKS, "Bookmarks");
                     else if (which == 1) showSavedList(KEY_HISTORY, "History");
-                    else if (which == 2) openDownloads();
-                    else if (which == 3) {
-                        devModeEnabled = !devModeEnabled;
-                        if (!devModeEnabled) hideTestRemote();
-                        saveSettings();
-                        Toast.makeText(this, "Dev Mode " + (devModeEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
-                    } else if (which == 4) {
-                        if (!devModeEnabled) {
-                            Toast.makeText(this, "Enable Dev Mode first", Toast.LENGTH_SHORT).show();
-                        } else if (remoteOverlay == null) showTestRemote(); else hideTestRemote();
-                    } else if (which == 5) {
-                        pageScalePercent = pageScalePercent == 85 ? 100 : 85;
-                        webView.getSettings().setTextZoom(pageScalePercent);
-                        webView.setInitialScale(pageScalePercent);
-                        saveSettings();
-                        Toast.makeText(this, "Page scale " + pageScalePercent + "%", Toast.LENGTH_SHORT).show();
-                        webView.reload();
-                    } else if (which == 6) {
+                    else if (which == 2) {
+                        if (remoteOverlay == null) showTestRemote(); else hideTestRemote();
+                    } else if (which == 3) {
                         adBlockEnabled = !adBlockEnabled;
-                        saveSettings();
                         Toast.makeText(this, "Ad blocker " + (adBlockEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
                         webView.reload();
-                    } else if (which == 7) {
-                        popupBlockEnabled = !popupBlockEnabled;
-                        saveSettings();
-                        Toast.makeText(this, "Popup blocker " + (popupBlockEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
-                    } else if (which == 8) {
-                        thirdPartyCookiesEnabled = !thirdPartyCookiesEnabled;
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, thirdPartyCookiesEnabled);
-                        saveSettings();
-                        Toast.makeText(this, "Third-party cookies " + (thirdPartyCookiesEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
-                        webView.reload();
-                    } else if (which == 9) showUserAgentPicker();
-                    else if (which == 10) clearBrowserData();
+                    } else if (which == 4) showUserAgentPicker();
+                    else if (which == 5) clearBrowserData();
                     else showAbout();
                 })
                 .setNegativeButton("Close", null)
@@ -899,20 +680,14 @@ public class MainActivity extends Activity {
                 .setTitle("User agent")
                 .setSingleChoiceItems(modes, uaIndex(), (dialog, which) -> {
                     uaMode = modes[which];
-                    applyUserAgent();
-                    saveSettings();
+                    WebSettings settings = webView.getSettings();
+                    if (which == 0) settings.setUserAgentString(UA_TV);
+                    if (which == 1) settings.setUserAgentString(UA_DESKTOP);
+                    if (which == 2) settings.setUserAgentString(UA_MOBILE);
                     dialog.dismiss();
                     webView.reload();
                 })
                 .show();
-    }
-
-    private void applyUserAgent() {
-        if (webView == null) return;
-        WebSettings settings = webView.getSettings();
-        if ("Desktop".equals(uaMode)) settings.setUserAgentString(UA_DESKTOP);
-        else if ("Mobile".equals(uaMode)) settings.setUserAgentString(UA_MOBILE);
-        else settings.setUserAgentString(UA_TV);
     }
 
     private int uaIndex() {
@@ -926,83 +701,14 @@ public class MainActivity extends Activity {
         webView.clearHistory();
         CookieManager.getInstance().removeAllCookies(null);
         CookieManager.getInstance().flush();
-        WebStorage.getInstance().deleteAllData();
         prefs.edit().remove(KEY_HISTORY).apply();
-        blockedRequests.set(0);
         Toast.makeText(this, "Browsing data and history cleared", Toast.LENGTH_SHORT).show();
-    }
-
-    private void startDownload(String url, String userAgent, String contentDisposition, String mimeType) {
-        if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) {
-            Toast.makeText(this, "Unsupported download link", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
-                checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            pendingDownloadUrl = url;
-            pendingDownloadUserAgent = userAgent;
-            pendingDownloadDisposition = contentDisposition;
-            pendingDownloadMime = mimeType;
-            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_WRITE_STORAGE);
-            return;
-        }
-        enqueueDownload(url, userAgent, contentDisposition, mimeType);
-    }
-
-    private void enqueueDownload(String url, String userAgent, String contentDisposition, String mimeType) {
-        try {
-            String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-            request.setTitle(fileName);
-            request.setDescription("Downloading with NuBrowse");
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setAllowedOverMetered(true);
-            request.setAllowedOverRoaming(true);
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-            if (mimeType != null && !mimeType.isEmpty()) request.setMimeType(mimeType);
-            if (userAgent != null && !userAgent.isEmpty()) request.addRequestHeader("User-Agent", userAgent);
-            String cookie = CookieManager.getInstance().getCookie(url);
-            if (cookie != null && !cookie.isEmpty()) request.addRequestHeader("Cookie", cookie);
-            String referer = webView.getUrl();
-            if (referer != null && !referer.isEmpty()) request.addRequestHeader("Referer", referer);
-
-            DownloadManager manager = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-            if (manager == null) throw new IllegalStateException("DownloadManager unavailable");
-            manager.enqueue(request);
-            Toast.makeText(this, "Download started: " + fileName, Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            Toast.makeText(this, "Download failed to start", Toast.LENGTH_LONG).show();
-        }
-    }
-
-    private void openDownloads() {
-        try {
-            Intent intent = new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS);
-            startActivity(intent);
-        } catch (Exception e) {
-            Toast.makeText(this, "Downloads screen unavailable on this device", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQUEST_WRITE_STORAGE) return;
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && pendingDownloadUrl != null) {
-            enqueueDownload(pendingDownloadUrl, pendingDownloadUserAgent, pendingDownloadDisposition, pendingDownloadMime);
-        } else {
-            Toast.makeText(this, "Storage permission is required for downloads on this Android version", Toast.LENGTH_LONG).show();
-        }
-        pendingDownloadUrl = null;
-        pendingDownloadUserAgent = null;
-        pendingDownloadDisposition = null;
-        pendingDownloadMime = null;
     }
 
     private void showAbout() {
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M4")
-                .setMessage("TV Test Candidate\n\nM4: compact TV viewport, smaller toolbar, Dev Mode-only floating remote, runtime diagnose, ad blocking, downloads and fullscreen video.")
+                .setTitle("NuBrowse M2")
+                .setMessage("TV-first browser\n\nM2: test remote, touch lock, TV keyboard, bookmarks and history.")
                 .setPositiveButton("OK", null)
                 .show();
     }
@@ -1011,7 +717,7 @@ public class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(14);
+        button.setTextSize(16);
         button.setAllCaps(false);
         button.setFocusable(true);
         button.setFocusableInTouchMode(false);
@@ -1020,8 +726,8 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams fixed(int width) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(width, dp(38));
-        p.setMargins(dp(1), 0, dp(1), 0);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(width, dp(46));
+        p.setMargins(dp(2), 0, dp(2), 0);
         return p;
     }
 
@@ -1042,17 +748,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void enterImmersiveMode() {
-        getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_FULLSCREEN |
-                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
-                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-    }
-
-    private void exitImmersiveMode() {
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN);
-    }
-
     private void hideCustomView() {
         if (customView == null) return;
         root.removeView(fullscreenContainer);
@@ -1060,8 +755,6 @@ public class MainActivity extends Activity {
         customView = null;
         if (customViewCallback != null) customViewCallback.onCustomViewHidden();
         customViewCallback = null;
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        exitImmersiveMode();
         webView.requestFocus();
         if (remoteOverlay != null) remoteOverlay.bringToFront();
     }
@@ -1095,7 +788,6 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.loadUrl("about:blank");
             webView.stopLoading();
-            webView.setDownloadListener(null);
             webView.setWebChromeClient(null);
             webView.setWebViewClient(null);
             webView.destroy();
