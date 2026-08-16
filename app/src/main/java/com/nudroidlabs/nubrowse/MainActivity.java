@@ -17,7 +17,6 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.text.Editable;
 import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyEvent;
@@ -25,9 +24,13 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
+import android.text.InputType;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
 import android.webkit.JsResult;
+import android.webkit.ServiceWorkerClient;
+import android.webkit.ServiceWorkerController;
 import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -57,7 +60,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class MainActivity extends Activity {
 
     private static final String HOME_URL = "https://www.google.com/";
-    private static final String UA_TV = "Mozilla/5.0 (Linux; Android 14; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 NuBrowseTV/3.0";
+    private static final String UA_TV = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 NuBrowseTV/4.1";
     private static final String UA_DESKTOP = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     private static final String UA_MOBILE = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
     private static final String PREFS = "nubrowse_m2";
@@ -67,6 +70,8 @@ public class MainActivity extends Activity {
     private static final String KEY_POPUP_BLOCK = "popup_block";
     private static final String KEY_THIRD_PARTY_COOKIES = "third_party_cookies";
     private static final String KEY_UA = "user_agent";
+    private static final String KEY_DEV_MODE = "dev_mode";
+    private static final String KEY_ZOOM = "zoom_percent";
     private static final int MAX_HISTORY = 50;
     private static final int REQUEST_WRITE_STORAGE = 130;
 
@@ -75,9 +80,10 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private FrameLayout root;
     private FrameLayout fullscreenContainer;
-    private FrameLayout keyboardOverlay;
     private FrameLayout remoteOverlay;
-    private LinearLayout keyboardRows;
+    private Button zoomLabel;
+    private Button devRemoteFab;
+    private AdBlocker adBlocker;
     private View customView;
     private View lastContentFocus;
     private WebChromeClient.CustomViewCallback customViewCallback;
@@ -86,9 +92,17 @@ public class MainActivity extends Activity {
     private boolean adBlockEnabled = true;
     private boolean popupBlockEnabled = true;
     private boolean thirdPartyCookiesEnabled = true;
-    private boolean keyboardNumbers = false;
+    private boolean devModeEnabled = true;
+    private int zoomPercent = 100;
     private String uaMode = "TV";
+    private boolean initialZoomApplied = false;
+    private LinearLayout pageContainer;
+    private int safeInsetLeft = 0;
+    private int safeInsetRight = 0;
     private final AtomicInteger blockedRequests = new AtomicInteger(0);
+    private final AtomicInteger blockedPopups = new AtomicInteger(0);
+    private final AtomicInteger pageBlockedRequests = new AtomicInteger(0);
+    private final AtomicInteger pageBlockedPopups = new AtomicInteger(0);
     private volatile String currentPageUrl = HOME_URL;
 
     private String pendingDownloadUrl;
@@ -112,29 +126,30 @@ public class MainActivity extends Activity {
 
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         loadSettings();
+        adBlocker = new AdBlocker(this);
         NuBrowseApp.markPhase(this, "building_ui");
 
         root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(16, 16, 16));
+        root.setBackgroundColor(Color.rgb(17, 19, 21));
         setContentView(root);
 
-        LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-        root.addView(page, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        pageContainer = new LinearLayout(this);
+        pageContainer.setOrientation(LinearLayout.VERTICAL);
+        root.addView(pageContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        installSafeAreaInsets();
 
         LinearLayout toolbar = new LinearLayout(this);
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(8), dp(6), dp(8), dp(6));
-        toolbar.setBackgroundColor(Color.rgb(24, 24, 24));
-        page.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)));
+        toolbar.setPadding(dp(7), dp(4), dp(7), dp(4));
+        toolbar.setBackgroundColor(Color.rgb(21, 23, 25));
+        pageContainer.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
 
         Button back = button("←");
         Button forward = button("→");
         Button home = button("⌂");
         Button refresh = button("↻");
         Button bookmark = button("★");
-        Button remote = button("RMT");
         Button menu = button("⋮");
 
         addressBar = new EditText(this);
@@ -142,41 +157,49 @@ public class MainActivity extends Activity {
         addressBar.setTextColor(Color.WHITE);
         addressBar.setHintTextColor(Color.LTGRAY);
         addressBar.setHint("Search or enter URL");
-        addressBar.setTextSize(18);
-        addressBar.setPadding(dp(14), 0, dp(14), 0);
+        addressBar.setTextSize(16);
+        addressBar.setPadding(dp(13), 0, dp(13), 0);
         addressBar.setBackgroundResource(R.drawable.address_bg);
-        addressBar.setImeOptions(EditorInfo.IME_ACTION_GO);
+        addressBar.setImeOptions(EditorInfo.IME_ACTION_GO | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        addressBar.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         addressBar.setSelectAllOnFocus(true);
         addressBar.setFocusable(true);
         addressBar.setFocusableInTouchMode(true);
-        addressBar.setShowSoftInputOnFocus(false);
+        addressBar.setShowSoftInputOnFocus(true);
 
         Button go = button("GO");
+        Button zoomOut = button("−");
+        zoomLabel = button("100%");
+        Button zoomIn = button("+");
 
-        toolbar.addView(back, fixed(dp(50)));
-        toolbar.addView(forward, fixed(dp(50)));
-        toolbar.addView(home, fixed(dp(50)));
-        toolbar.addView(refresh, fixed(dp(50)));
-        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(46), 1f);
-        addressParams.setMargins(dp(6), 0, dp(6), 0);
+        toolbar.addView(back, fixed(dp(38)));
+        toolbar.addView(forward, fixed(dp(38)));
+        toolbar.addView(home, fixed(dp(38)));
+        toolbar.addView(refresh, fixed(dp(38)));
+        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        addressParams.setMargins(dp(5), 0, dp(5), 0);
         toolbar.addView(addressBar, addressParams);
-        toolbar.addView(go, fixed(dp(62)));
-        toolbar.addView(bookmark, fixed(dp(50)));
-        toolbar.addView(remote, fixed(dp(66)));
-        toolbar.addView(menu, fixed(dp(50)));
+        toolbar.addView(go, fixed(dp(50)));
+        toolbar.addView(bookmark, fixed(dp(38)));
+        toolbar.addView(zoomOut, fixed(dp(32)));
+        toolbar.addView(zoomLabel, fixed(dp(52)));
+        toolbar.addView(zoomIn, fixed(dp(32)));
+        toolbar.addView(menu, fixed(dp(38)));
+        updateZoomLabel();
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progressBar.setMax(100);
-        page.addView(progressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)));
+        pageContainer.addView(progressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
 
         NuBrowseApp.markPhase(this, "creating_webview");
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
-        page.addView(webView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        pageContainer.addView(webView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         configureWebView();
+        createDevRemoteFab();
         NuBrowseApp.markPhase(this, "webview_configured");
 
         back.setOnClickListener(v -> browserBack());
@@ -186,10 +209,12 @@ public class MainActivity extends Activity {
         go.setOnClickListener(v -> submitAddress());
         bookmark.setOnClickListener(v -> toggleBookmark());
         bookmark.setOnLongClickListener(v -> { showSavedList(KEY_BOOKMARKS, "Bookmarks"); return true; });
-        remote.setOnClickListener(v -> showTestRemote());
+        zoomOut.setOnClickListener(v -> changeZoom(-10));
+        zoomLabel.setOnClickListener(v -> resetZoom());
+        zoomIn.setOnClickListener(v -> changeZoom(10));
         menu.setOnClickListener(v -> showSettings());
 
-        addressBar.setOnClickListener(v -> showTvKeyboard());
+        addressBar.setOnClickListener(v -> showSystemKeyboard());
         addressBar.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_GO || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
                 submitAddress();
@@ -271,6 +296,9 @@ public class MainActivity extends Activity {
         adBlockEnabled = prefs.getBoolean(KEY_ADBLOCK, true);
         popupBlockEnabled = prefs.getBoolean(KEY_POPUP_BLOCK, true);
         thirdPartyCookiesEnabled = prefs.getBoolean(KEY_THIRD_PARTY_COOKIES, true);
+        devModeEnabled = prefs.getBoolean(KEY_DEV_MODE, true);
+        zoomPercent = prefs.getInt(KEY_ZOOM, 100);
+        if (zoomPercent < 60 || zoomPercent > 180) zoomPercent = 100;
         uaMode = prefs.getString(KEY_UA, "TV");
         if (uaMode == null) uaMode = "TV";
     }
@@ -280,6 +308,8 @@ public class MainActivity extends Activity {
                 .putBoolean(KEY_ADBLOCK, adBlockEnabled)
                 .putBoolean(KEY_POPUP_BLOCK, popupBlockEnabled)
                 .putBoolean(KEY_THIRD_PARTY_COOKIES, thirdPartyCookiesEnabled)
+                .putBoolean(KEY_DEV_MODE, devModeEnabled)
+                .putInt(KEY_ZOOM, zoomPercent)
                 .putString(KEY_UA, uaMode)
                 .apply();
     }
@@ -300,8 +330,12 @@ public class MainActivity extends Activity {
         applyUserAgent();
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
-        settings.setLoadWithOverviewMode(true);
-        settings.setUseWideViewPort(true);
+        settings.setSupportZoom(true);
+        settings.setLoadWithOverviewMode(false);
+        settings.setUseWideViewPort(false);
+        settings.setTextZoom(100);
+        webView.setHorizontalScrollBarEnabled(false);
+        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, thirdPartyCookiesEnabled);
@@ -309,12 +343,40 @@ public class MainActivity extends Activity {
         webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
                 startDownload(url, userAgent, contentDisposition, mimeType));
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                ServiceWorkerController.getInstance().setServiceWorkerClient(new ServiceWorkerClient() {
+                    @Override
+                    public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
+                        String requestUrl = request.getUrl().toString();
+                        if (adBlockEnabled && adBlocker.shouldBlock(requestUrl, currentPageUrl)) {
+                            blockedRequests.incrementAndGet();
+                            pageBlockedRequests.incrementAndGet();
+                            return emptyResponse();
+                        }
+                        return null;
+                    }
+                });
+            } catch (Exception ignored) {
+                // Some vendor WebView builds may not expose service-worker interception cleanly.
+            }
+        }
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
                 String scheme = uri.getScheme();
-                if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) return false;
+                if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+                    String target = uri.toString();
+                    if (adBlockEnabled && adBlocker.isSuspiciousNavigation(target, currentPageUrl)) {
+                        blockedPopups.incrementAndGet();
+                        pageBlockedPopups.incrementAndGet();
+                        Toast.makeText(MainActivity.this, "Ad redirect blocked", Toast.LENGTH_SHORT).show();
+                        return true;
+                    }
+                    return false;
+                }
                 Toast.makeText(MainActivity.this, "Unsupported link: " + scheme, Toast.LENGTH_SHORT).show();
                 return true;
             }
@@ -323,8 +385,9 @@ public class MainActivity extends Activity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String requestUrl = request.getUrl().toString();
                 String pageUrl = currentPageUrl;
-                if (adBlockEnabled && AdBlocker.shouldBlock(requestUrl, pageUrl)) {
+                if (adBlockEnabled && adBlocker.shouldBlock(requestUrl, pageUrl)) {
                     blockedRequests.incrementAndGet();
+                    pageBlockedRequests.incrementAndGet();
                     return emptyResponse();
                 }
                 return super.shouldInterceptRequest(view, request);
@@ -332,9 +395,17 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                pageBlockedRequests.set(0);
+                pageBlockedPopups.set(0);
                 if (url != null && !url.isEmpty()) currentPageUrl = url;
                 addressBar.setText(url);
                 progressBar.setVisibility(View.VISIBLE);
+            }
+
+            @Override
+            public void onPageCommitVisible(WebView view, String url) {
+                injectFitToScreen();
+                injectCosmeticAdCleanup();
             }
 
             @Override
@@ -342,7 +413,16 @@ public class MainActivity extends Activity {
                 if (url != null && !url.isEmpty()) currentPageUrl = url;
                 addressBar.setText(url);
                 recordHistory(url, view.getTitle());
+                injectFitToScreen();
+                view.postDelayed(MainActivity.this::injectFitToScreen, 500);
                 injectCosmeticAdCleanup();
+                if (!initialZoomApplied) {
+                    initialZoomApplied = true;
+                    if (zoomPercent != 100) {
+                        webView.post(() -> webView.zoomBy(zoomPercent / 100f));
+                    }
+                }
+                if (devRemoteFab != null) devRemoteFab.bringToFront();
             }
 
             @Override
@@ -364,6 +444,8 @@ public class MainActivity extends Activity {
             @Override
             public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, android.os.Message resultMsg) {
                 if (popupBlockEnabled && !isUserGesture) {
+                    blockedPopups.incrementAndGet();
+                    pageBlockedPopups.incrementAndGet();
                     Toast.makeText(MainActivity.this, "Popup blocked", Toast.LENGTH_SHORT).show();
                     return false;
                 }
@@ -372,27 +454,36 @@ public class MainActivity extends Activity {
                 root.addView(popup, new FrameLayout.LayoutParams(1, 1));
                 popup.getSettings().setJavaScriptEnabled(true);
                 popup.setWebViewClient(new WebViewClient() {
-                    @Override
-                    public boolean shouldOverrideUrlLoading(WebView child, WebResourceRequest request) {
-                        String url = request.getUrl().toString();
+                    private boolean resolved = false;
+
+                    private void resolvePopup(WebView child, String url) {
+                        if (resolved || url == null || "about:blank".equals(url)) return;
+                        resolved = true;
+                        child.stopLoading();
                         root.removeView(child);
                         child.destroy();
-                        hideTvKeyboard();
+
+                        if (adBlockEnabled && adBlocker.isSuspiciousNavigation(url, currentPageUrl)) {
+                            blockedPopups.incrementAndGet();
+                            pageBlockedPopups.incrementAndGet();
+                            Toast.makeText(MainActivity.this, "Ad popup blocked", Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+
+                        hideSystemKeyboard();
                         webView.loadUrl(url);
                         webView.requestFocus();
+                    }
+
+                    @Override
+                    public boolean shouldOverrideUrlLoading(WebView child, WebResourceRequest request) {
+                        resolvePopup(child, request.getUrl().toString());
                         return true;
                     }
 
                     @Override
                     public void onPageStarted(WebView child, String url, Bitmap favicon) {
-                        if (url != null && !"about:blank".equals(url)) {
-                            child.stopLoading();
-                            root.removeView(child);
-                            child.destroy();
-                            hideTvKeyboard();
-                            webView.loadUrl(url);
-                            webView.requestFocus();
-                        }
+                        resolvePopup(child, url);
                     }
                 });
                 WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
@@ -418,7 +509,7 @@ public class MainActivity extends Activity {
                     callback.onCustomViewHidden();
                     return;
                 }
-                hideTvKeyboard();
+                hideSystemKeyboard();
                 customView = view;
                 customViewCallback = callback;
                 fullscreenContainer = new FrameLayout(MainActivity.this);
@@ -429,6 +520,7 @@ public class MainActivity extends Activity {
                 enterImmersiveMode();
                 fullscreenContainer.requestFocus();
                 if (remoteOverlay != null) remoteOverlay.bringToFront();
+                else if (devRemoteFab != null && devModeEnabled) devRemoteFab.bringToFront();
             }
 
             @Override
@@ -442,18 +534,138 @@ public class MainActivity extends Activity {
         return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
     }
 
-    private void injectCosmeticAdCleanup() {
-        if (!adBlockEnabled) return;
-        String js = "javascript:(function(){" +
-                "var s=['iframe[src*=\\\"ad\\\"]','iframe[id*=\\\"ad\\\"]','[id^=\\\"ad-\\\"]','[id^=\\\"ads-\\\"]','[class^=\\\"ad-\\\"]','[class*=\\\" ad-\\\"]','[class^=\\\"ads-\\\"]','[class*=\\\" ads-\\\"]','[aria-label*=\\\"advertisement\\\" i]'];" +
-                "s.forEach(function(q){document.querySelectorAll(q).forEach(function(e){e.style.setProperty('display','none','important');});});" +
+    private void injectFitToScreen() {
+        if (webView == null || "Mobile".equals(uaMode) || zoomPercent > 100) return;
+        String js = "(function(){" +
+                "try{" +
+                "var d=document.documentElement,b=document.body;if(!d||!b)return;" +
+                "var v=document.querySelector('meta[name=viewport]');" +
+                "if(!v){v=document.createElement('meta');v.name='viewport';(document.head||d).appendChild(v);}" +
+                "v.setAttribute('content','width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover');" +
+                "d.style.setProperty('max-width','100%','important');" +
+                "d.style.setProperty('overflow-x','hidden','important');" +
+                "b.style.setProperty('max-width','100%','important');" +
+                "b.style.setProperty('overflow-x','hidden','important');" +
+                "b.style.removeProperty('zoom');" +
+                "requestAnimationFrame(function(){" +
+                "var vw=Math.max(1,d.clientWidth||window.innerWidth||1);" +
+                "var sw=Math.max(d.scrollWidth||0,b.scrollWidth||0,vw);" +
+                "if(sw>vw+2){var r=Math.max(0.50,Math.min(1,vw/sw));b.style.setProperty('zoom',String(r),'important');}" +
+                "});" +
+                "setTimeout(function(){try{" +
+                "var vw=Math.max(1,d.clientWidth||window.innerWidth||1);var sw=Math.max(d.scrollWidth||0,b.scrollWidth||0,vw);" +
+                "if(sw>vw+2){var r=Math.max(0.50,Math.min(1,vw/sw));b.style.setProperty('zoom',String(r),'important');}" +
+                "}catch(x){}},450);" +
+                "}catch(e){}" +
                 "})()";
         webView.evaluateJavascript(js, null);
     }
 
+    private void injectCosmeticAdCleanup() {
+        if (!adBlockEnabled) return;
+        String js = "(function(){" +
+                "try{" +
+                "if(!window.__nubrowseCosmeticCount){window.__nubrowseCosmeticCount=0;}" +
+                "function hide(e){" +
+                "if(!e||e.nodeType!==1||e.getAttribute('data-nubrowse-hidden')==='1')return;" +
+                "e.setAttribute('data-nubrowse-hidden','1');" +
+                "e.style.setProperty('display','none','important');" +
+                "e.style.setProperty('visibility','hidden','important');" +
+                "e.style.setProperty('height','0','important');" +
+                "e.style.setProperty('min-height','0','important');" +
+                "e.style.setProperty('margin','0','important');" +
+                "e.style.setProperty('padding','0','important');" +
+                "window.__nubrowseCosmeticCount++;" +
+                "}" +
+                "var selectors=[" +
+                "'ins.adsbygoogle','amp-ad','amp-embed[type=taboola]'," +
+                "'[data-ad-client]','[data-ad-slot]','[data-adunit]','[data-ad-unit]'," +
+                "'[id*=\\\"google_ads\\\" i]','[class*=\\\"adsbygoogle\\\" i]'," +
+                "'[id^=\\\"ad-\\\" i]','[id^=\\\"ads-\\\" i]','[class^=\\\"ad-\\\" i]','[class*=\\\" ad-\\\" i]'," +
+                "'[class^=\\\"ads-\\\" i]','[class*=\\\" ads-\\\" i]'," +
+                "'[id*=\\\"advert\\\" i]','[class*=\\\"advert\\\" i]'," +
+                "'[id*=\\\"iklan\\\" i]','[class*=\\\"iklan\\\" i]'," +
+                "'[id*=\\\"popunder\\\" i]','[class*=\\\"popunder\\\" i]'," +
+                "'[aria-label*=\\\"advertisement\\\" i]','[aria-label*=\\\"sponsored\\\" i]'," +
+                "'iframe[src*=\\\"doubleclick\\\" i]','iframe[src*=\\\"adserver\\\" i]','iframe[src*=\\\"googlesyndication\\\" i]'" +
+                "];" +
+                "function clean(root){" +
+                "var base=(root&&root.querySelectorAll)?root:document;" +
+                "selectors.forEach(function(q){try{base.querySelectorAll(q).forEach(hide);}catch(x){}});" +
+                "try{base.querySelectorAll('a[href]').forEach(function(a){" +
+                "var u=new URL(a.href,location.href);" +
+                "if(!u.hostname||u.hostname===location.hostname||u.hostname.endsWith('.'+location.hostname))return;" +
+                "var h=u.hostname.toLowerCase();" +
+                "if(/(^|[.-])(slot|casino|togel|gacor|bet|judi)([.-]|$)/i.test(h)||" +
+                "/(popads|popcash|propellerads|adsterra|exoclick|onclick|hilltopads|monetag)/i.test(h)){" +
+                "var box=a.closest('div,section,aside,li,figure')||a;" +
+                "var r=box.getBoundingClientRect();" +
+                "if(r.width>180&&r.height>35&&r.height<500)hide(box);else hide(a);" +
+                "}" +
+                "});}catch(x){}" +
+                "}" +
+                "clean(document);" +
+                "if(!window.__nubrowseObserver&&document.documentElement){" +
+                "window.__nubrowseObserver=new MutationObserver(function(m){" +
+                "clearTimeout(window.__nubrowseAdTimer);" +
+                "window.__nubrowseAdTimer=setTimeout(function(){clean(document);},180);" +
+                "});" +
+                "window.__nubrowseObserver.observe(document.documentElement,{childList:true,subtree:true});" +
+                "}" +
+                "return window.__nubrowseCosmeticCount;" +
+                "}catch(e){return -1;}" +
+                "})()";
+        webView.evaluateJavascript(js, null);
+    }
+
+    private void showBlockStats() {
+        if (webView == null) return;
+        webView.evaluateJavascript(
+                "(function(){return window.__nubrowseCosmeticCount||0;})()",
+                value -> {
+                    String cosmetic = value == null ? "0" : value.replace("\"", "");
+                    new AlertDialog.Builder(MainActivity.this)
+                            .setTitle("Dev blocker stats")
+                            .setMessage("This page network blocked: " + pageBlockedRequests.get() +
+                                    "\nThis page cosmetic hidden: " + cosmetic +
+                                    "\nThis page popup/redirect blocked: " + pageBlockedPopups.get() +
+                                    "\nSession network blocked: " + blockedRequests.get() +
+                                    "\nSession popup/redirect blocked: " + blockedPopups.get() +
+                                    "\nHost rules loaded: " + (adBlocker == null ? 0 : adBlocker.ruleCount()) +
+                                    "\n\nPage: " + currentPageUrl)
+                            .setPositiveButton("OK", null)
+                            .show();
+                });
+    }
+
+    private void updateZoomLabel() {
+        if (zoomLabel != null) zoomLabel.setText(zoomPercent + "%");
+    }
+
+    private void changeZoom(int delta) {
+        int target = Math.max(60, Math.min(180, zoomPercent + delta));
+        if (target == zoomPercent || webView == null) return;
+        float factor = target / (float) zoomPercent;
+        webView.zoomBy(factor);
+        zoomPercent = target;
+        if (zoomPercent <= 100) webView.postDelayed(this::injectFitToScreen, 80);
+        updateZoomLabel();
+        saveSettings();
+    }
+
+    private void resetZoom() {
+        if (webView == null || zoomPercent == 100) return;
+        float factor = 100f / zoomPercent;
+        webView.zoomBy(factor);
+        zoomPercent = 100;
+        webView.postDelayed(this::injectFitToScreen, 80);
+        updateZoomLabel();
+        saveSettings();
+    }
+
     private void submitAddress() {
         navigate(addressBar.getText().toString());
-        hideTvKeyboard();
+        hideSystemKeyboard();
     }
 
     private void navigate(String input) {
@@ -471,137 +683,88 @@ public class MainActivity extends Activity {
     }
 
     private void loadHome() {
-        hideTvKeyboard();
+        hideSystemKeyboard();
         webView.loadUrl(HOME_URL);
         webView.requestFocus();
     }
 
-    private void showTvKeyboard() {
-        if (keyboardOverlay != null) return;
-
-        keyboardOverlay = new FrameLayout(this);
-        keyboardOverlay.setBackgroundColor(Color.argb(220, 15, 15, 15));
-        FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(280), Gravity.BOTTOM);
-        root.addView(keyboardOverlay, overlayParams);
-
-        LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(dp(18), dp(10), dp(18), dp(12));
-        keyboardOverlay.addView(body, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        TextView title = new TextView(this);
-        title.setText("TV Keyboard   •   D-pad + OK");
-        title.setTextColor(Color.LTGRAY);
-        title.setTextSize(14);
-        body.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(28)));
-
-        keyboardRows = new LinearLayout(this);
-        keyboardRows.setOrientation(LinearLayout.VERTICAL);
-        body.addView(keyboardRows, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        rebuildKeyboard();
-        if (remoteOverlay != null) remoteOverlay.bringToFront();
+    private void showSystemKeyboard() {
+        if (addressBar == null) return;
+        addressBar.requestFocus();
+        addressBar.post(() -> {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(addressBar, InputMethodManager.SHOW_IMPLICIT);
+        });
     }
 
-    private void rebuildKeyboard() {
-        if (keyboardRows == null) return;
-        keyboardRows.removeAllViews();
+    private void hideSystemKeyboard() {
+        View focused = getCurrentFocus();
+        if (focused == null) focused = addressBar;
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null && focused != null) imm.hideSoftInputFromWindow(focused.getWindowToken(), 0);
+    }
 
-        if (!keyboardNumbers) {
-            addKeyboardRow(new String[]{"Q","W","E","R","T","Y","U","I","O","P"});
-            addKeyboardRow(new String[]{"A","S","D","F","G","H","J","K","L"});
-            addKeyboardRow(new String[]{"Z","X","C","V","B","N","M",".com","/",":"});
-            addKeyboardRow(new String[]{"123","SPACE","⌫","CLEAR","GO","CLOSE"});
-        } else {
-            addKeyboardRow(new String[]{"1","2","3","4","5","6","7","8","9","0"});
-            addKeyboardRow(new String[]{"-","_",".","/",":","?","&","=","%","#"});
-            addKeyboardRow(new String[]{"@","+","~","(",")","[","]","!","'","\""});
-            addKeyboardRow(new String[]{"ABC","SPACE","⌫","CLEAR","GO","CLOSE"});
-        }
+    private void installSafeAreaInsets() {
+        if (root == null || pageContainer == null) return;
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            safeInsetLeft = Math.max(0, insets.getSystemWindowInsetLeft());
+            safeInsetRight = Math.max(0, insets.getSystemWindowInsetRight());
+            pageContainer.setPadding(safeInsetLeft, 0, safeInsetRight, 0);
+            updateDevRemoteSafeArea();
+            return insets;
+        });
+        root.requestApplyInsets();
+    }
 
-        if (keyboardRows.getChildCount() > 0) {
-            LinearLayout firstRow = (LinearLayout) keyboardRows.getChildAt(0);
-            if (firstRow.getChildCount() > 0) firstRow.getChildAt(0).requestFocus();
+    private void updateDevRemoteSafeArea() {
+        if (devRemoteFab != null) {
+            ViewGroup.LayoutParams raw = devRemoteFab.getLayoutParams();
+            if (raw instanceof FrameLayout.LayoutParams) {
+                FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) raw;
+                p.setMargins(dp(8) + safeInsetLeft, dp(8), dp(14) + safeInsetRight, dp(14));
+                devRemoteFab.setLayoutParams(p);
+            }
         }
     }
 
-    private void addKeyboardRow(String[] keys) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER);
-        keyboardRows.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        for (String key : keys) {
-            Button b = keyboardButton(key);
-            float weight = ("SPACE".equals(key) ? 2.2f : (("CLEAR".equals(key) || "CLOSE".equals(key)) ? 1.4f : 1f));
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight);
-            p.setMargins(dp(3), dp(3), dp(3), dp(3));
-            row.addView(b, p);
-        }
-    }
-
-    private Button keyboardButton(String key) {
-        Button b = button(key);
-        b.setTextSize(key.length() > 4 ? 13 : 16);
-        b.setOnClickListener(v -> handleKeyboardKey(key));
-        return b;
-    }
-
-    private void handleKeyboardKey(String key) {
-        switch (key) {
-            case "123": keyboardNumbers = true; rebuildKeyboard(); break;
-            case "ABC": keyboardNumbers = false; rebuildKeyboard(); break;
-            case "SPACE": replaceSelection(" "); break;
-            case "⌫": backspaceAddress(); break;
-            case "CLEAR": addressBar.setText(""); addressBar.setSelection(0); break;
-            case "GO": submitAddress(); break;
-            case "CLOSE": hideTvKeyboard(); addressBar.requestFocus(); break;
-            default: replaceSelection(key); break;
-        }
-    }
-
-    private void replaceSelection(String text) {
-        Editable e = addressBar.getText();
-        int start = addressBar.getSelectionStart();
-        int end = addressBar.getSelectionEnd();
-        if (start < 0 || end < 0) {
-            e.append(text);
-            addressBar.setSelection(e.length());
+    private void createDevRemoteFab() {
+        if (!devModeEnabled || root == null) return;
+        if (devRemoteFab != null) {
+            devRemoteFab.setVisibility(View.VISIBLE);
+            devRemoteFab.bringToFront();
             return;
         }
-        int a = Math.min(start, end);
-        int b = Math.max(start, end);
-        e.replace(a, b, text);
-        addressBar.setSelection(a + text.length());
+        devRemoteFab = button("⌾");
+        devRemoteFab.setTextSize(18);
+        devRemoteFab.setContentDescription("Open Dev Remote");
+        devRemoteFab.setOnClickListener(v -> showTestRemote());
+        FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.BOTTOM);
+        p.setMargins(dp(8) + safeInsetLeft, dp(8), dp(14) + safeInsetRight, dp(14));
+        root.addView(devRemoteFab, p);
+        devRemoteFab.bringToFront();
     }
 
-    private void backspaceAddress() {
-        Editable e = addressBar.getText();
-        int start = addressBar.getSelectionStart();
-        int end = addressBar.getSelectionEnd();
-        if (start < 0 || end < 0) return;
-        int a = Math.min(start, end);
-        int b = Math.max(start, end);
-        if (a != b) {
-            e.delete(a, b);
-            addressBar.setSelection(a);
-        } else if (a > 0) {
-            e.delete(a - 1, a);
-            addressBar.setSelection(a - 1);
+    private void updateDevRemoteFab() {
+        if (!devModeEnabled) {
+            if (devRemoteFab != null && root != null) {
+                root.removeView(devRemoteFab);
+                devRemoteFab = null;
+            }
+            return;
         }
-    }
-
-    private void hideTvKeyboard() {
-        if (keyboardOverlay == null) return;
-        root.removeView(keyboardOverlay);
-        keyboardOverlay = null;
-        keyboardRows = null;
+        if (remoteOverlay == null) createDevRemoteFab();
+        else if (devRemoteFab != null) devRemoteFab.setVisibility(View.GONE);
     }
 
     private void showTestRemote() {
+        if (!devModeEnabled) {
+            Toast.makeText(this, "Dev Mode is OFF", Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (remoteOverlay != null) return;
         lastContentFocus = getCurrentFocus();
         if (lastContentFocus == null) lastContentFocus = webView;
+        if (devRemoteFab != null) devRemoteFab.setVisibility(View.GONE);
 
         remoteOverlay = new FrameLayout(this);
         remoteOverlay.setFocusable(false);
@@ -609,7 +772,7 @@ public class MainActivity extends Activity {
         root.addView(remoteOverlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         View shield = new View(this);
-        shield.setBackgroundColor(Color.argb(70, 0, 0, 0));
+        shield.setBackgroundColor(Color.TRANSPARENT);
         shield.setClickable(true);
         shield.setFocusable(false);
         shield.setOnTouchListener((v, event) -> true);
@@ -618,33 +781,50 @@ public class MainActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setGravity(Gravity.CENTER);
-        panel.setPadding(dp(14), dp(14), dp(14), dp(14));
+        panel.setPadding(dp(9), dp(8), dp(9), dp(9));
         panel.setBackgroundResource(R.drawable.remote_bg);
-        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.CENTER_VERTICAL);
-        panelParams.setMargins(0, dp(8), dp(16), dp(8));
+        panel.setAlpha(0.84f);
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(dp(210), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.CENTER_VERTICAL);
+        panelParams.setMargins(dp(10) + safeInsetLeft, dp(10), dp(16) + safeInsetRight, dp(10));
         remoteOverlay.addView(panel, panelParams);
 
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = new TextView(this);
-        title.setText("TEST REMOTE\nTouch locked");
+        title.setText("REMOTE");
         title.setTextColor(Color.WHITE);
         title.setGravity(Gravity.CENTER);
-        title.setTextSize(14);
-        panel.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
+        title.setTextSize(11);
+        Button close = button("×");
+        close.setFocusable(false);
+        close.setTextSize(17);
+        close.setOnClickListener(v -> hideTestRemote());
+        header.addView(title, new LinearLayout.LayoutParams(0, dp(28), 1f));
+        header.addView(close, new LinearLayout.LayoutParams(dp(34), dp(28)));
+        panel.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
 
         panel.addView(remoteRow("", "▲", ""));
         panel.addView(remoteRow("◀", "OK", "▶"));
         panel.addView(remoteRow("", "▼", ""));
         panel.addView(remoteRow("BACK", "HOME", "MENU"));
-        panel.addView(remoteRow("", "CLOSE", ""));
+
+        TextView hint = new TextView(this);
+        hint.setText("D-pad + OK");
+        hint.setTextColor(Color.LTGRAY);
+        hint.setGravity(Gravity.CENTER);
+        hint.setTextSize(9);
+        panel.addView(hint, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(22)));
 
         if (lastContentFocus != null) lastContentFocus.requestFocus();
+        remoteOverlay.bringToFront();
     }
 
     private LinearLayout remoteRow(String left, String centre, String right) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER);
-        row.setPadding(0, dp(3), 0, dp(3));
+        row.setPadding(0, dp(2), 0, dp(2));
         addRemoteCell(row, left);
         addRemoteCell(row, centre);
         addRemoteCell(row, right);
@@ -654,16 +834,19 @@ public class MainActivity extends Activity {
     private void addRemoteCell(LinearLayout row, String label) {
         if (label.isEmpty()) {
             View spacer = new View(this);
-            row.addView(spacer, new LinearLayout.LayoutParams(0, dp(52), 1f));
+            row.addView(spacer, new LinearLayout.LayoutParams(0, dp(40), 1f));
             return;
         }
         Button b = button(label);
         b.setFocusable(false);
         b.setFocusableInTouchMode(false);
-        b.setTextSize(label.length() > 3 ? 12 : 16);
+        b.setTextSize(label.length() > 3 ? 9 : 14);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setPadding(dp(2), 0, dp(2), 0);
         b.setOnClickListener(v -> handleRemoteButton(label));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(52), 1f);
-        p.setMargins(dp(3), 0, dp(3), 0);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        p.setMargins(dp(2), 0, dp(2), 0);
         row.addView(b, p);
     }
 
@@ -695,6 +878,7 @@ public class MainActivity extends Activity {
         remoteOverlay = null;
         if (lastContentFocus != null) lastContentFocus.requestFocus();
         lastContentFocus = null;
+        updateDevRemoteFab();
     }
 
     private void toggleBookmark() {
@@ -764,7 +948,7 @@ public class MainActivity extends Activity {
                 .setTitle(title)
                 .setItems(labels.toArray(new String[0]), (dialog, which) -> {
                     if (which >= 0 && which < urls.size()) {
-                        hideTvKeyboard();
+                        hideSystemKeyboard();
                         webView.loadUrl(urls.get(which));
                         webView.requestFocus();
                     }
@@ -797,29 +981,38 @@ public class MainActivity extends Activity {
     }
 
     private void showSettings() {
-        String blocker = "Ad blocker: " + (adBlockEnabled ? "ON" : "OFF") + "  •  blocked " + blockedRequests.get();
-        String popup = "Popup blocker: " + (popupBlockEnabled ? "ON" : "OFF");
+        String blocker = "Ad blocker: " + (adBlockEnabled ? "ON" : "OFF") +
+                "  •  network " + blockedRequests.get() +
+                "  •  rules " + (adBlocker == null ? 0 : adBlocker.ruleCount());
+        String popup = "Popup blocker: " + (popupBlockEnabled ? "ON" : "OFF") +
+                "  •  blocked " + blockedPopups.get();
         String cookies = "Third-party cookies: " + (thirdPartyCookiesEnabled ? "ON" : "OFF");
+        String dev = "Dev Mode: " + (devModeEnabled ? "ON" : "OFF");
         String[] items = {
                 "Bookmarks",
                 "History",
                 "Downloads",
-                remoteOverlay == null ? "Open test remote" : "Close test remote",
+                dev,
                 blocker,
                 popup,
                 cookies,
                 "User agent: " + uaMode,
+                "Dev blocker stats",
                 "Clear browsing data",
-                "About NuBrowse M3 R1"
+                "About NuBrowse M6"
         };
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M3 R1")
+                .setTitle("NuBrowse M6")
                 .setItems(items, (dialog, which) -> {
                     if (which == 0) showSavedList(KEY_BOOKMARKS, "Bookmarks");
                     else if (which == 1) showSavedList(KEY_HISTORY, "History");
                     else if (which == 2) openDownloads();
                     else if (which == 3) {
-                        if (remoteOverlay == null) showTestRemote(); else hideTestRemote();
+                        devModeEnabled = !devModeEnabled;
+                        if (!devModeEnabled) hideTestRemote();
+                        saveSettings();
+                        updateDevRemoteFab();
+                        Toast.makeText(this, "Dev Mode " + (devModeEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
                     } else if (which == 4) {
                         adBlockEnabled = !adBlockEnabled;
                         saveSettings();
@@ -835,9 +1028,16 @@ public class MainActivity extends Activity {
                         saveSettings();
                         Toast.makeText(this, "Third-party cookies " + (thirdPartyCookiesEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
                         webView.reload();
-                    } else if (which == 7) showUserAgentPicker();
-                    else if (which == 8) clearBrowserData();
-                    else showAbout();
+                    } else if (which == 7) {
+                        showUserAgentPicker();
+                    } else if (which == 8) {
+                        if (devModeEnabled) showBlockStats();
+                        else Toast.makeText(this, "Enable Dev Mode first", Toast.LENGTH_SHORT).show();
+                    } else if (which == 9) {
+                        clearBrowserData();
+                    } else {
+                        showAbout();
+                    }
                 })
                 .setNegativeButton("Close", null)
                 .show();
@@ -879,6 +1079,9 @@ public class MainActivity extends Activity {
         WebStorage.getInstance().deleteAllData();
         prefs.edit().remove(KEY_HISTORY).apply();
         blockedRequests.set(0);
+        blockedPopups.set(0);
+        pageBlockedRequests.set(0);
+        pageBlockedPopups.set(0);
         Toast.makeText(this, "Browsing data and history cleared", Toast.LENGTH_SHORT).show();
     }
 
@@ -951,8 +1154,8 @@ public class MainActivity extends Activity {
 
     private void showAbout() {
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M3 R1")
-                .setMessage("TV-first browser\n\nM3 R1: runtime stability fix, crash diagnose, stronger ad blocking, downloads and TV controls.")
+                .setTitle("NuBrowse M6")
+                .setMessage("TV Test Candidate\n\nM6: modern compact UI, system keyboard, true Fit mode at 100%, safe-area handling, floating Dev Remote and M5 blocker retained.")
                 .setPositiveButton("OK", null)
                 .show();
     }
@@ -961,7 +1164,7 @@ public class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(16);
+        button.setTextSize(15);
         button.setAllCaps(false);
         button.setFocusable(true);
         button.setFocusableInTouchMode(false);
@@ -970,7 +1173,7 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams fixed(int width) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(width, dp(46));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(width, dp(40));
         p.setMargins(dp(2), 0, dp(2), 0);
         return p;
     }
@@ -980,10 +1183,7 @@ public class MainActivity extends Activity {
     }
 
     private void browserBack() {
-        if (keyboardOverlay != null) {
-            hideTvKeyboard();
-            addressBar.requestFocus();
-        } else if (customView != null) {
+        if (customView != null) {
             hideCustomView();
         } else if (webView.canGoBack()) {
             webView.goBack();
@@ -1014,6 +1214,7 @@ public class MainActivity extends Activity {
         exitImmersiveMode();
         webView.requestFocus();
         if (remoteOverlay != null) remoteOverlay.bringToFront();
+        else if (devRemoteFab != null && devModeEnabled) devRemoteFab.bringToFront();
     }
 
     @Override

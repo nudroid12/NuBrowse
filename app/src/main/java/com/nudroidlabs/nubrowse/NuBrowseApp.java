@@ -38,7 +38,7 @@ public class NuBrowseApp extends Application {
         StringBuilder out = new StringBuilder();
         out.append("NUBROWSE RUNTIME DIAGNOSE\n");
         out.append("=========================\n");
-        out.append("APP: NuBrowse M3 R1\n");
+        out.append("APP: NuBrowse M6\n");
         out.append("PHASE: ").append(phase).append('\n');
         out.append("THREAD: ").append(thread == null ? "unknown" : thread.getName()).append('\n');
         out.append("EXCEPTION: ").append(throwable == null ? "unknown" : throwable.getClass().getName()).append('\n');
