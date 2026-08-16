@@ -13,9 +13,9 @@ final class AdBlocker {
             "doubleclick.net",
             "googleadservices.com",
             "googlesyndication.com",
+            "googletagservices.com",
             "google-analytics.com",
             "googletagmanager.com",
-            "googletagservices.com",
             "adservice.google.com",
             "amazon-adsystem.com",
             "adsrvr.org",
@@ -43,28 +43,71 @@ final class AdBlocker {
             "mathtag.com",
             "adsafeprotected.com",
             "innovid.com",
+            "branch.io",
+            "appsflyer.com",
             "chartbeat.com",
             "hotjar.com",
             "clarity.ms",
-            "branch.io",
-            "appsflyer.com"
+            "adform.net",
+            "adform.com",
+            "media.net",
+            "mgid.com",
+            "revcontent.com",
+            "exoclick.com",
+            "exosrv.com",
+            "popads.net",
+            "popcash.net",
+            "propellerads.com",
+            "onclicka.com",
+            "trafficjunky.net",
+            "juicyads.com",
+            "hilltopads.net",
+            "adsterra.com",
+            "adcash.com"
     )));
+
+    private static final String[] THIRD_PARTY_PATH_MARKERS = {
+            "/ads/", "/adserver/", "/adserve/", "/advert/", "/advertising/",
+            "/bannerads/", "/popunder/", "/popupads/", "?adunit=", "&adunit="
+    };
 
     private AdBlocker() {}
 
-    static boolean shouldBlock(String rawUrl) {
-        if (rawUrl == null || rawUrl.isEmpty()) return false;
+    static boolean shouldBlock(String requestUrl, String pageUrl) {
+        if (requestUrl == null || requestUrl.isEmpty()) return false;
         try {
-            Uri uri = Uri.parse(rawUrl);
-            String host = uri.getHost();
+            Uri request = Uri.parse(requestUrl);
+            String host = normaliseHost(request.getHost());
             if (host == null) return false;
-            host = host.toLowerCase(Locale.US);
+
             for (String blocked : BLOCKED_HOSTS) {
                 if (host.equals(blocked) || host.endsWith("." + blocked)) return true;
+            }
+
+            String pageHost = null;
+            if (pageUrl != null && !pageUrl.isEmpty()) {
+                pageHost = normaliseHost(Uri.parse(pageUrl).getHost());
+            }
+            if (pageHost != null && !sameSite(host, pageHost)) {
+                String lower = requestUrl.toLowerCase(Locale.US);
+                for (String marker : THIRD_PARTY_PATH_MARKERS) {
+                    if (lower.contains(marker)) return true;
+                }
             }
         } catch (Exception ignored) {
             return false;
         }
         return false;
+    }
+
+    private static String normaliseHost(String host) {
+        if (host == null || host.trim().isEmpty()) return null;
+        String value = host.toLowerCase(Locale.US);
+        return value.startsWith("www.") ? value.substring(4) : value;
+    }
+
+    private static boolean sameSite(String first, String second) {
+        if (first.equals(second)) return true;
+        return first.endsWith("." + second) || second.endsWith("." + first);
     }
 }
