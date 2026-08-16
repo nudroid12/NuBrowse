@@ -17,8 +17,6 @@ final class AdBlocker {
             "googletagmanager.com",
             "googletagservices.com",
             "adservice.google.com",
-            "pagead2.googlesyndication.com",
-            "securepubads.g.doubleclick.net",
             "amazon-adsystem.com",
             "adsrvr.org",
             "adnxs.com",

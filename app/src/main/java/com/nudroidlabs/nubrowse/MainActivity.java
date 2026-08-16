@@ -3,11 +3,14 @@ package com.nudroidlabs.nubrowse;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.Editable;
 import android.view.Gravity;
+import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -30,25 +33,39 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.ByteArrayInputStream;
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
 
     private static final String HOME_URL = "https://www.google.com/";
-    private static final String UA_TV = "Mozilla/5.0 (Linux; Android 14; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 NuBrowseTV/1.0";
+    private static final String UA_TV = "Mozilla/5.0 (Linux; Android 14; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 NuBrowseTV/2.0";
     private static final String UA_DESKTOP = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     private static final String UA_MOBILE = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+    private static final String PREFS = "nubrowse_m2";
+    private static final String KEY_BOOKMARKS = "bookmarks";
+    private static final String KEY_HISTORY = "history";
+    private static final int MAX_HISTORY = 50;
 
     private WebView webView;
     private EditText addressBar;
     private ProgressBar progressBar;
     private FrameLayout root;
     private FrameLayout fullscreenContainer;
+    private FrameLayout keyboardOverlay;
+    private FrameLayout remoteOverlay;
+    private LinearLayout keyboardRows;
     private View customView;
+    private View lastContentFocus;
     private WebChromeClient.CustomViewCallback customViewCallback;
+    private SharedPreferences prefs;
     private boolean adBlockEnabled = true;
+    private boolean keyboardNumbers = false;
     private String uaMode = "TV";
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -57,6 +74,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(16, 16, 16));
@@ -70,13 +88,15 @@ public class MainActivity extends Activity {
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.setPadding(dp(8), dp(6), dp(8), dp(6));
-        toolbar.setBackgroundColor(Color.rgb(28, 28, 28));
-        page.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+        toolbar.setBackgroundColor(Color.rgb(24, 24, 24));
+        page.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(60)));
 
         Button back = button("←");
         Button forward = button("→");
         Button home = button("⌂");
         Button refresh = button("↻");
+        Button bookmark = button("★");
+        Button remote = button("RMT");
         Button menu = button("⋮");
 
         addressBar = new EditText(this);
@@ -86,23 +106,26 @@ public class MainActivity extends Activity {
         addressBar.setHint("Search or enter URL");
         addressBar.setTextSize(18);
         addressBar.setPadding(dp(14), 0, dp(14), 0);
-        addressBar.setBackgroundResource(com.nudroidlabs.nubrowse.R.drawable.address_bg);
+        addressBar.setBackgroundResource(R.drawable.address_bg);
         addressBar.setImeOptions(EditorInfo.IME_ACTION_GO);
         addressBar.setSelectAllOnFocus(true);
         addressBar.setFocusable(true);
         addressBar.setFocusableInTouchMode(true);
+        addressBar.setShowSoftInputOnFocus(false);
 
         Button go = button("GO");
 
-        toolbar.addView(back, fixed(dp(52)));
-        toolbar.addView(forward, fixed(dp(52)));
-        toolbar.addView(home, fixed(dp(52)));
-        toolbar.addView(refresh, fixed(dp(52)));
-        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        toolbar.addView(back, fixed(dp(50)));
+        toolbar.addView(forward, fixed(dp(50)));
+        toolbar.addView(home, fixed(dp(50)));
+        toolbar.addView(refresh, fixed(dp(50)));
+        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(46), 1f);
         addressParams.setMargins(dp(6), 0, dp(6), 0);
         toolbar.addView(addressBar, addressParams);
-        toolbar.addView(go, fixed(dp(64)));
-        toolbar.addView(menu, fixed(dp(52)));
+        toolbar.addView(go, fixed(dp(62)));
+        toolbar.addView(bookmark, fixed(dp(50)));
+        toolbar.addView(remote, fixed(dp(66)));
+        toolbar.addView(menu, fixed(dp(50)));
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progressBar.setMax(100);
@@ -116,15 +139,19 @@ public class MainActivity extends Activity {
 
         configureWebView();
 
-        back.setOnClickListener(v -> goBack());
+        back.setOnClickListener(v -> browserBack());
         forward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
-        home.setOnClickListener(v -> webView.loadUrl(HOME_URL));
+        home.setOnClickListener(v -> loadHome());
         refresh.setOnClickListener(v -> webView.reload());
-        go.setOnClickListener(v -> navigate(addressBar.getText().toString()));
+        go.setOnClickListener(v -> submitAddress());
+        bookmark.setOnClickListener(v -> toggleBookmark());
+        remote.setOnClickListener(v -> showTestRemote());
         menu.setOnClickListener(v -> showSettings());
+
+        addressBar.setOnClickListener(v -> showTvKeyboard());
         addressBar.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_GO || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
-                navigate(addressBar.getText().toString());
+                submitAddress();
                 return true;
             }
             return false;
@@ -135,7 +162,6 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl(HOME_URL);
         }
-
         addressBar.requestFocus();
     }
 
@@ -166,18 +192,14 @@ public class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
                 String scheme = uri.getScheme();
-                if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
-                    return false;
-                }
+                if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) return false;
                 Toast.makeText(MainActivity.this, "Unsupported link: " + scheme, Toast.LENGTH_SHORT).show();
                 return true;
             }
 
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                if (adBlockEnabled && AdBlocker.shouldBlock(request.getUrl().toString())) {
-                    return emptyResponse();
-                }
+                if (adBlockEnabled && AdBlocker.shouldBlock(request.getUrl().toString())) return emptyResponse();
                 return super.shouldInterceptRequest(view, request);
             }
 
@@ -190,6 +212,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 addressBar.setText(url);
+                recordHistory(url, view.getTitle());
                 injectCosmeticAdCleanup();
             }
         });
@@ -224,6 +247,7 @@ public class MainActivity extends Activity {
                     callback.onCustomViewHidden();
                     return;
                 }
+                hideTvKeyboard();
                 customView = view;
                 customViewCallback = callback;
                 fullscreenContainer = new FrameLayout(MainActivity.this);
@@ -231,6 +255,7 @@ public class MainActivity extends Activity {
                 fullscreenContainer.addView(view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                 root.addView(fullscreenContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                 fullscreenContainer.requestFocus();
+                if (remoteOverlay != null) remoteOverlay.bringToFront();
             }
 
             @Override
@@ -241,8 +266,7 @@ public class MainActivity extends Activity {
     }
 
     private WebResourceResponse emptyResponse() {
-        byte[] empty = new byte[0];
-        return new WebResourceResponse("text/plain", "UTF-8", 204, "No Content", null, new ByteArrayInputStream(empty));
+        return new WebResourceResponse("text/plain", "UTF-8", 204, "No Content", null, new ByteArrayInputStream(new byte[0]));
     }
 
     private void injectCosmeticAdCleanup() {
@@ -252,6 +276,11 @@ public class MainActivity extends Activity {
                 "s.forEach(function(q){document.querySelectorAll(q).forEach(function(e){e.style.display='none';});});" +
                 "})()";
         webView.evaluateJavascript(js, null);
+    }
+
+    private void submitAddress() {
+        navigate(addressBar.getText().toString());
+        hideTvKeyboard();
     }
 
     private void navigate(String input) {
@@ -268,21 +297,378 @@ public class MainActivity extends Activity {
         webView.requestFocus();
     }
 
+    private void loadHome() {
+        hideTvKeyboard();
+        webView.loadUrl(HOME_URL);
+        webView.requestFocus();
+    }
+
+    private void showTvKeyboard() {
+        if (keyboardOverlay != null) return;
+
+        keyboardOverlay = new FrameLayout(this);
+        keyboardOverlay.setBackgroundColor(Color.argb(220, 15, 15, 15));
+        FrameLayout.LayoutParams overlayParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(280), Gravity.BOTTOM);
+        root.addView(keyboardOverlay, overlayParams);
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(18), dp(10), dp(18), dp(12));
+        keyboardOverlay.addView(body, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        TextView title = new TextView(this);
+        title.setText("TV Keyboard   •   D-pad + OK");
+        title.setTextColor(Color.LTGRAY);
+        title.setTextSize(14);
+        body.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(28)));
+
+        keyboardRows = new LinearLayout(this);
+        keyboardRows.setOrientation(LinearLayout.VERTICAL);
+        body.addView(keyboardRows, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        rebuildKeyboard();
+        if (remoteOverlay != null) remoteOverlay.bringToFront();
+    }
+
+    private void rebuildKeyboard() {
+        if (keyboardRows == null) return;
+        keyboardRows.removeAllViews();
+
+        if (!keyboardNumbers) {
+            addKeyboardRow(new String[]{"Q","W","E","R","T","Y","U","I","O","P"});
+            addKeyboardRow(new String[]{"A","S","D","F","G","H","J","K","L"});
+            addKeyboardRow(new String[]{"Z","X","C","V","B","N","M",".com","/",":"});
+            addKeyboardRow(new String[]{"123","SPACE","⌫","CLEAR","GO","CLOSE"});
+        } else {
+            addKeyboardRow(new String[]{"1","2","3","4","5","6","7","8","9","0"});
+            addKeyboardRow(new String[]{"-","_",".","/",":","?","&","=","%","#"});
+            addKeyboardRow(new String[]{"@","+","~","(",")","[","]","!","'","\""});
+            addKeyboardRow(new String[]{"ABC","SPACE","⌫","CLEAR","GO","CLOSE"});
+        }
+
+        if (keyboardRows.getChildCount() > 0) {
+            LinearLayout firstRow = (LinearLayout) keyboardRows.getChildAt(0);
+            if (firstRow.getChildCount() > 0) firstRow.getChildAt(0).requestFocus();
+        }
+    }
+
+    private void addKeyboardRow(String[] keys) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        keyboardRows.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        for (String key : keys) {
+            Button b = keyboardButton(key);
+            float weight = ("SPACE".equals(key) ? 2.2f : (("CLEAR".equals(key) || "CLOSE".equals(key)) ? 1.4f : 1f));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight);
+            p.setMargins(dp(3), dp(3), dp(3), dp(3));
+            row.addView(b, p);
+        }
+    }
+
+    private Button keyboardButton(String key) {
+        Button b = button(key);
+        b.setTextSize(key.length() > 4 ? 13 : 16);
+        b.setOnClickListener(v -> handleKeyboardKey(key));
+        return b;
+    }
+
+    private void handleKeyboardKey(String key) {
+        switch (key) {
+            case "123":
+                keyboardNumbers = true;
+                rebuildKeyboard();
+                break;
+            case "ABC":
+                keyboardNumbers = false;
+                rebuildKeyboard();
+                break;
+            case "SPACE":
+                replaceSelection(" ");
+                break;
+            case "⌫":
+                backspaceAddress();
+                break;
+            case "CLEAR":
+                addressBar.setText("");
+                addressBar.setSelection(0);
+                break;
+            case "GO":
+                submitAddress();
+                break;
+            case "CLOSE":
+                hideTvKeyboard();
+                addressBar.requestFocus();
+                break;
+            default:
+                replaceSelection(key);
+                break;
+        }
+    }
+
+    private void replaceSelection(String text) {
+        Editable e = addressBar.getText();
+        int start = addressBar.getSelectionStart();
+        int end = addressBar.getSelectionEnd();
+        if (start < 0 || end < 0) {
+            e.append(text);
+            addressBar.setSelection(e.length());
+            return;
+        }
+        int a = Math.min(start, end);
+        int b = Math.max(start, end);
+        e.replace(a, b, text);
+        addressBar.setSelection(a + text.length());
+    }
+
+    private void backspaceAddress() {
+        Editable e = addressBar.getText();
+        int start = addressBar.getSelectionStart();
+        int end = addressBar.getSelectionEnd();
+        if (start < 0 || end < 0) return;
+        int a = Math.min(start, end);
+        int b = Math.max(start, end);
+        if (a != b) {
+            e.delete(a, b);
+            addressBar.setSelection(a);
+        } else if (a > 0) {
+            e.delete(a - 1, a);
+            addressBar.setSelection(a - 1);
+        }
+    }
+
+    private void hideTvKeyboard() {
+        if (keyboardOverlay == null) return;
+        root.removeView(keyboardOverlay);
+        keyboardOverlay = null;
+        keyboardRows = null;
+    }
+
+    private void showTestRemote() {
+        if (remoteOverlay != null) return;
+        lastContentFocus = getCurrentFocus();
+        if (lastContentFocus == null) lastContentFocus = webView;
+
+        remoteOverlay = new FrameLayout(this);
+        remoteOverlay.setFocusable(false);
+        remoteOverlay.setFocusableInTouchMode(false);
+        root.addView(remoteOverlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        View shield = new View(this);
+        shield.setBackgroundColor(Color.argb(70, 0, 0, 0));
+        shield.setClickable(true);
+        shield.setFocusable(false);
+        shield.setOnTouchListener((v, event) -> true);
+        remoteOverlay.addView(shield, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER);
+        panel.setPadding(dp(14), dp(14), dp(14), dp(14));
+        panel.setBackgroundResource(R.drawable.remote_bg);
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.CENTER_VERTICAL);
+        panelParams.setMargins(0, dp(8), dp(16), dp(8));
+        remoteOverlay.addView(panel, panelParams);
+
+        TextView title = new TextView(this);
+        title.setText("TEST REMOTE\nTouch locked");
+        title.setTextColor(Color.WHITE);
+        title.setGravity(Gravity.CENTER);
+        title.setTextSize(14);
+        panel.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
+
+        panel.addView(remoteRow("", "▲", ""));
+        panel.addView(remoteRow("◀", "OK", "▶"));
+        panel.addView(remoteRow("", "▼", ""));
+        panel.addView(remoteRow("BACK", "HOME", "MENU"));
+        panel.addView(remoteRow("", "CLOSE", ""));
+
+        if (lastContentFocus != null) lastContentFocus.requestFocus();
+    }
+
+    private LinearLayout remoteRow(String left, String centre, String right) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        row.setPadding(0, dp(3), 0, dp(3));
+
+        addRemoteCell(row, left);
+        addRemoteCell(row, centre);
+        addRemoteCell(row, right);
+        return row;
+    }
+
+    private void addRemoteCell(LinearLayout row, String label) {
+        if (label.isEmpty()) {
+            View spacer = new View(this);
+            row.addView(spacer, new LinearLayout.LayoutParams(0, dp(52), 1f));
+            return;
+        }
+        Button b = button(label);
+        b.setFocusable(false);
+        b.setFocusableInTouchMode(false);
+        b.setTextSize(label.length() > 3 ? 12 : 16);
+        b.setOnClickListener(v -> handleRemoteButton(label));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(52), 1f);
+        p.setMargins(dp(3), 0, dp(3), 0);
+        row.addView(b, p);
+    }
+
+    private void handleRemoteButton(String label) {
+        switch (label) {
+            case "▲": sendVirtualDpad(KeyEvent.KEYCODE_DPAD_UP); break;
+            case "▼": sendVirtualDpad(KeyEvent.KEYCODE_DPAD_DOWN); break;
+            case "◀": sendVirtualDpad(KeyEvent.KEYCODE_DPAD_LEFT); break;
+            case "▶": sendVirtualDpad(KeyEvent.KEYCODE_DPAD_RIGHT); break;
+            case "OK": sendVirtualDpad(KeyEvent.KEYCODE_DPAD_CENTER); break;
+            case "BACK": browserBack(); break;
+            case "HOME": loadHome(); break;
+            case "MENU": showSettings(); break;
+            case "CLOSE": hideTestRemote(); break;
+        }
+    }
+
+    private void sendVirtualDpad(int keyCode) {
+        long now = android.os.SystemClock.uptimeMillis();
+        KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, 0, -1, 0, KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_DPAD);
+        KeyEvent up = new KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0, 0, -1, 0, KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_DPAD);
+        dispatchKeyEvent(down);
+        dispatchKeyEvent(up);
+    }
+
+    private void hideTestRemote() {
+        if (remoteOverlay == null) return;
+        root.removeView(remoteOverlay);
+        remoteOverlay = null;
+        if (lastContentFocus != null) lastContentFocus.requestFocus();
+        lastContentFocus = null;
+    }
+
+    private void toggleBookmark() {
+        String url = webView.getUrl();
+        if (url == null || url.trim().isEmpty()) return;
+        JSONArray source = readArray(KEY_BOOKMARKS);
+        JSONArray out = new JSONArray();
+        boolean removed = false;
+        for (int i = 0; i < source.length(); i++) {
+            JSONObject o = source.optJSONObject(i);
+            if (o == null) continue;
+            if (url.equals(o.optString("url"))) {
+                removed = true;
+                continue;
+            }
+            out.put(o);
+        }
+        if (!removed) {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("url", url);
+                o.put("title", safeTitle(webView.getTitle(), url));
+            } catch (Exception ignored) {}
+            JSONArray withNew = new JSONArray();
+            withNew.put(o);
+            for (int i = 0; i < out.length(); i++) withNew.put(out.opt(i));
+            out = withNew;
+        }
+        saveArray(KEY_BOOKMARKS, out);
+        Toast.makeText(this, removed ? "Bookmark removed" : "Bookmarked", Toast.LENGTH_SHORT).show();
+    }
+
+    private void recordHistory(String url, String title) {
+        if (url == null || url.isEmpty() || "about:blank".equals(url)) return;
+        JSONArray source = readArray(KEY_HISTORY);
+        JSONArray out = new JSONArray();
+        JSONObject current = new JSONObject();
+        try {
+            current.put("url", url);
+            current.put("title", safeTitle(title, url));
+        } catch (Exception ignored) {}
+        out.put(current);
+        for (int i = 0; i < source.length() && out.length() < MAX_HISTORY; i++) {
+            JSONObject o = source.optJSONObject(i);
+            if (o == null || url.equals(o.optString("url"))) continue;
+            out.put(o);
+        }
+        saveArray(KEY_HISTORY, out);
+    }
+
+    private void showSavedList(String key, String title) {
+        JSONArray array = readArray(key);
+        if (array.length() == 0) {
+            Toast.makeText(this, title + " is empty", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        List<String> labels = new ArrayList<>();
+        List<String> urls = new ArrayList<>();
+        for (int i = 0; i < array.length(); i++) {
+            JSONObject o = array.optJSONObject(i);
+            if (o == null) continue;
+            String url = o.optString("url");
+            labels.add(o.optString("title", url));
+            urls.add(url);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setItems(labels.toArray(new String[0]), (dialog, which) -> {
+                    if (which >= 0 && which < urls.size()) {
+                        hideTvKeyboard();
+                        webView.loadUrl(urls.get(which));
+                        webView.requestFocus();
+                    }
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private JSONArray readArray(String key) {
+        try {
+            return new JSONArray(prefs.getString(key, "[]"));
+        } catch (Exception ignored) {
+            return new JSONArray();
+        }
+    }
+
+    private void saveArray(String key, JSONArray value) {
+        prefs.edit().putString(key, value.toString()).apply();
+    }
+
+    private String safeTitle(String title, String url) {
+        String t = title == null ? "" : title.trim();
+        if (!t.isEmpty()) return t;
+        try {
+            Uri uri = Uri.parse(url);
+            return uri.getHost() == null ? url : uri.getHost();
+        } catch (Exception ignored) {
+            return url;
+        }
+    }
+
     private void showSettings() {
         String blocker = adBlockEnabled ? "Ad blocker: ON" : "Ad blocker: OFF";
-        String[] items = {blocker, "User agent: " + uaMode, "Clear browser data"};
+        String[] items = {
+                "Bookmarks",
+                "History",
+                remoteOverlay == null ? "Open test remote" : "Close test remote",
+                blocker,
+                "User agent: " + uaMode,
+                "Clear browsing data",
+                "About NuBrowse M2"
+        };
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M1")
+                .setTitle("NuBrowse M2")
                 .setItems(items, (dialog, which) -> {
-                    if (which == 0) {
+                    if (which == 0) showSavedList(KEY_BOOKMARKS, "Bookmarks");
+                    else if (which == 1) showSavedList(KEY_HISTORY, "History");
+                    else if (which == 2) {
+                        if (remoteOverlay == null) showTestRemote(); else hideTestRemote();
+                    } else if (which == 3) {
                         adBlockEnabled = !adBlockEnabled;
                         Toast.makeText(this, "Ad blocker " + (adBlockEnabled ? "ON" : "OFF"), Toast.LENGTH_SHORT).show();
                         webView.reload();
-                    } else if (which == 1) {
-                        showUserAgentPicker();
-                    } else {
-                        clearBrowserData();
-                    }
+                    } else if (which == 4) showUserAgentPicker();
+                    else if (which == 5) clearBrowserData();
+                    else showAbout();
                 })
                 .setNegativeButton("Close", null)
                 .show();
@@ -315,23 +701,32 @@ public class MainActivity extends Activity {
         webView.clearHistory();
         CookieManager.getInstance().removeAllCookies(null);
         CookieManager.getInstance().flush();
-        Toast.makeText(this, "Browser data cleared", Toast.LENGTH_SHORT).show();
+        prefs.edit().remove(KEY_HISTORY).apply();
+        Toast.makeText(this, "Browsing data and history cleared", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showAbout() {
+        new AlertDialog.Builder(this)
+                .setTitle("NuBrowse M2")
+                .setMessage("TV-first browser\n\nM2: test remote, touch lock, TV keyboard, bookmarks and history.")
+                .setPositiveButton("OK", null)
+                .show();
     }
 
     private Button button(String text) {
         Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(17);
+        button.setTextSize(16);
         button.setAllCaps(false);
         button.setFocusable(true);
         button.setFocusableInTouchMode(false);
-        button.setBackgroundResource(com.nudroidlabs.nubrowse.R.drawable.button_bg);
+        button.setBackgroundResource(R.drawable.button_bg);
         return button;
     }
 
     private LinearLayout.LayoutParams fixed(int width) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(width, dp(44));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(width, dp(46));
         p.setMargins(dp(2), 0, dp(2), 0);
         return p;
     }
@@ -340,8 +735,11 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private void goBack() {
-        if (customView != null) {
+    private void browserBack() {
+        if (keyboardOverlay != null) {
+            hideTvKeyboard();
+            addressBar.requestFocus();
+        } else if (customView != null) {
             hideCustomView();
         } else if (webView.canGoBack()) {
             webView.goBack();
@@ -358,11 +756,16 @@ public class MainActivity extends Activity {
         if (customViewCallback != null) customViewCallback.onCustomViewHidden();
         customViewCallback = null;
         webView.requestFocus();
+        if (remoteOverlay != null) remoteOverlay.bringToFront();
     }
 
     @Override
     public void onBackPressed() {
-        goBack();
+        if (remoteOverlay != null) {
+            hideTestRemote();
+            return;
+        }
+        browserBack();
     }
 
     @Override
