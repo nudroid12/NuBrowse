@@ -12,7 +12,10 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -20,6 +23,7 @@ import android.os.Environment;
 import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -43,6 +47,7 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -60,7 +65,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class MainActivity extends Activity {
 
     private static final String HOME_URL = "https://www.google.com/";
-    private static final String UA_TV = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 NuBrowseTV/4.1";
+    private static final String UA_TV = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     private static final String UA_DESKTOP = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     private static final String UA_MOBILE = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
     private static final String PREFS = "nubrowse_m2";
@@ -74,15 +79,19 @@ public class MainActivity extends Activity {
     private static final String KEY_ZOOM = "zoom_percent";
     private static final int MAX_HISTORY = 50;
     private static final int REQUEST_WRITE_STORAGE = 130;
+    private static final long MODE_DOUBLE_TAP_MS = 330L;
+    private static final int TV_LAYOUT_WIDTH_CSS = 1280;
 
     private WebView webView;
     private EditText addressBar;
     private ProgressBar progressBar;
     private FrameLayout root;
     private FrameLayout fullscreenContainer;
+    private FrameLayout browserFrame;
     private FrameLayout remoteOverlay;
     private Button zoomLabel;
     private Button devRemoteFab;
+    private CursorIndicatorView cursorIndicator;
     private AdBlocker adBlocker;
     private View customView;
     private View lastContentFocus;
@@ -99,6 +108,15 @@ public class MainActivity extends Activity {
     private LinearLayout pageContainer;
     private int safeInsetLeft = 0;
     private int safeInsetRight = 0;
+    private boolean cursorMode = false;
+    private float cursorX = -1f;
+    private float cursorY = -1f;
+    private long lastArrowTapAt = 0L;
+    private int lastArrowTapKey = KeyEvent.KEYCODE_UNKNOWN;
+    private int suppressArrowKeyUp = KeyEvent.KEYCODE_UNKNOWN;
+    private final Runnable hideCursorRunnable = () -> {
+        if (cursorMode && cursorIndicator != null) cursorIndicator.setVisibility(View.INVISIBLE);
+    };
     private final AtomicInteger blockedRequests = new AtomicInteger(0);
     private final AtomicInteger blockedPopups = new AtomicInteger(0);
     private final AtomicInteger pageBlockedRequests = new AtomicInteger(0);
@@ -145,12 +163,12 @@ public class MainActivity extends Activity {
         toolbar.setBackgroundColor(Color.rgb(21, 23, 25));
         pageContainer.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
 
-        Button back = button("←");
-        Button forward = button("→");
-        Button home = button("⌂");
-        Button refresh = button("↻");
-        Button bookmark = button("★");
-        Button menu = button("⋮");
+        ImageButton back = iconButton(R.drawable.ic_back, "Back");
+        ImageButton forward = iconButton(R.drawable.ic_forward, "Forward");
+        ImageButton home = iconButton(R.drawable.ic_home, "Home");
+        ImageButton refresh = iconButton(R.drawable.ic_refresh, "Refresh");
+        ImageButton bookmark = iconButton(R.drawable.ic_bookmark, "Bookmark");
+        ImageButton menu = iconButton(R.drawable.ic_more, "Menu");
 
         addressBar = new EditText(this);
         addressBar.setSingleLine(true);
@@ -167,24 +185,25 @@ public class MainActivity extends Activity {
         addressBar.setFocusableInTouchMode(true);
         addressBar.setShowSoftInputOnFocus(true);
 
-        Button go = button("GO");
-        Button zoomOut = button("−");
+        ImageButton go = iconButton(R.drawable.ic_go, "Go");
+        ImageButton zoomOut = iconButton(R.drawable.ic_zoom_out, "Zoom out");
         zoomLabel = button("100%");
-        Button zoomIn = button("+");
+        zoomLabel.setTextSize(12);
+        ImageButton zoomIn = iconButton(R.drawable.ic_zoom_in, "Zoom in");
 
-        toolbar.addView(back, fixed(dp(38)));
-        toolbar.addView(forward, fixed(dp(38)));
-        toolbar.addView(home, fixed(dp(38)));
-        toolbar.addView(refresh, fixed(dp(38)));
+        toolbar.addView(back, fixed(dp(40)));
+        toolbar.addView(forward, fixed(dp(40)));
+        toolbar.addView(home, fixed(dp(40)));
+        toolbar.addView(refresh, fixed(dp(40)));
         LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
         addressParams.setMargins(dp(5), 0, dp(5), 0);
         toolbar.addView(addressBar, addressParams);
-        toolbar.addView(go, fixed(dp(50)));
-        toolbar.addView(bookmark, fixed(dp(38)));
-        toolbar.addView(zoomOut, fixed(dp(32)));
-        toolbar.addView(zoomLabel, fixed(dp(52)));
-        toolbar.addView(zoomIn, fixed(dp(32)));
-        toolbar.addView(menu, fixed(dp(38)));
+        toolbar.addView(go, fixed(dp(40)));
+        toolbar.addView(bookmark, fixed(dp(40)));
+        toolbar.addView(zoomOut, fixed(dp(36)));
+        toolbar.addView(zoomLabel, fixed(dp(50)));
+        toolbar.addView(zoomIn, fixed(dp(36)));
+        toolbar.addView(menu, fixed(dp(40)));
         updateZoomLabel();
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -192,11 +211,21 @@ public class MainActivity extends Activity {
         pageContainer.addView(progressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
 
         NuBrowseApp.markPhase(this, "creating_webview");
+        browserFrame = new FrameLayout(this);
+        pageContainer.addView(browserFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
-        pageContainer.addView(webView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        browserFrame.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        cursorIndicator = new CursorIndicatorView(this);
+        cursorIndicator.setVisibility(View.GONE);
+        cursorIndicator.setClickable(false);
+        cursorIndicator.setFocusable(false);
+        FrameLayout.LayoutParams cursorParams = new FrameLayout.LayoutParams(dp(28), dp(34));
+        browserFrame.addView(cursorIndicator, cursorParams);
 
         configureWebView();
         createDevRemoteFab();
@@ -331,9 +360,10 @@ public class MainActivity extends Activity {
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setSupportZoom(true);
-        settings.setLoadWithOverviewMode(false);
-        settings.setUseWideViewPort(false);
+        settings.setLoadWithOverviewMode(!"Mobile".equals(uaMode));
+        settings.setUseWideViewPort(!"Mobile".equals(uaMode));
         settings.setTextZoom(100);
+        webView.setInitialScale(0);
         webView.setHorizontalScrollBarEnabled(false);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
@@ -404,7 +434,7 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageCommitVisible(WebView view, String url) {
-                injectFitToScreen();
+                injectTvPageOptimisation();
                 injectCosmeticAdCleanup();
             }
 
@@ -413,8 +443,8 @@ public class MainActivity extends Activity {
                 if (url != null && !url.isEmpty()) currentPageUrl = url;
                 addressBar.setText(url);
                 recordHistory(url, view.getTitle());
-                injectFitToScreen();
-                view.postDelayed(MainActivity.this::injectFitToScreen, 500);
+                injectTvPageOptimisation();
+                view.postDelayed(MainActivity.this::injectTvPageOptimisation, 500);
                 injectCosmeticAdCleanup();
                 if (!initialZoomApplied) {
                     initialZoomApplied = true;
@@ -534,28 +564,32 @@ public class MainActivity extends Activity {
         return new WebResourceResponse("text/plain", "UTF-8", new ByteArrayInputStream(new byte[0]));
     }
 
-    private void injectFitToScreen() {
-        if (webView == null || "Mobile".equals(uaMode) || zoomPercent > 100) return;
+    private void injectTvPageOptimisation() {
+        if (webView == null || "Mobile".equals(uaMode)) return;
+        final boolean fitMode = zoomPercent <= 100;
         String js = "(function(){" +
                 "try{" +
                 "var d=document.documentElement,b=document.body;if(!d||!b)return;" +
                 "var v=document.querySelector('meta[name=viewport]');" +
                 "if(!v){v=document.createElement('meta');v.name='viewport';(document.head||d).appendChild(v);}" +
-                "v.setAttribute('content','width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover');" +
-                "d.style.setProperty('max-width','100%','important');" +
+                "v.setAttribute('content','width=" + TV_LAYOUT_WIDTH_CSS + ", user-scalable=yes');" +
+                "var id='nubrowse-tv-layout';var st=document.getElementById(id);" +
+                "if(!st){st=document.createElement('style');st.id=id;(document.head||d).appendChild(st);}" +
+                "st.textContent='html,body{min-width:0!important;max-width:100%!important;}'+" +
+                "'img,video,svg,canvas{max-width:100%!important;height:auto;}'+" +
+                "'iframe{max-width:100%!important;}';" +
+                "b.style.removeProperty('zoom');b.style.removeProperty('transform');" +
+                "if(" + (fitMode ? "true" : "false") + "){" +
                 "d.style.setProperty('overflow-x','hidden','important');" +
-                "b.style.setProperty('max-width','100%','important');" +
                 "b.style.setProperty('overflow-x','hidden','important');" +
-                "b.style.removeProperty('zoom');" +
-                "requestAnimationFrame(function(){" +
-                "var vw=Math.max(1,d.clientWidth||window.innerWidth||1);" +
+                "requestAnimationFrame(function(){try{" +
+                "var vw=Math.max(1,window.innerWidth||d.clientWidth||1);" +
                 "var sw=Math.max(d.scrollWidth||0,b.scrollWidth||0,vw);" +
-                "if(sw>vw+2){var r=Math.max(0.50,Math.min(1,vw/sw));b.style.setProperty('zoom',String(r),'important');}" +
-                "});" +
-                "setTimeout(function(){try{" +
-                "var vw=Math.max(1,d.clientWidth||window.innerWidth||1);var sw=Math.max(d.scrollWidth||0,b.scrollWidth||0,vw);" +
-                "if(sw>vw+2){var r=Math.max(0.50,Math.min(1,vw/sw));b.style.setProperty('zoom',String(r),'important');}" +
-                "}catch(x){}},450);" +
+                "if(sw>vw+4){var r=Math.max(0.55,Math.min(1,vw/sw));b.style.setProperty('zoom',String(r),'important');}" +
+                "}catch(x){}});" +
+                "}else{" +
+                "d.style.removeProperty('overflow-x');b.style.removeProperty('overflow-x');" +
+                "}" +
                 "}catch(e){}" +
                 "})()";
         webView.evaluateJavascript(js, null);
@@ -648,7 +682,7 @@ public class MainActivity extends Activity {
         float factor = target / (float) zoomPercent;
         webView.zoomBy(factor);
         zoomPercent = target;
-        if (zoomPercent <= 100) webView.postDelayed(this::injectFitToScreen, 80);
+        if (zoomPercent <= 100) webView.postDelayed(this::injectTvPageOptimisation, 80);
         updateZoomLabel();
         saveSettings();
     }
@@ -658,7 +692,7 @@ public class MainActivity extends Activity {
         float factor = 100f / zoomPercent;
         webView.zoomBy(factor);
         zoomPercent = 100;
-        webView.postDelayed(this::injectFitToScreen, 80);
+        webView.postDelayed(this::injectTvPageOptimisation, 80);
         updateZoomLabel();
         saveSettings();
     }
@@ -810,7 +844,7 @@ public class MainActivity extends Activity {
         panel.addView(remoteRow("BACK", "HOME", "MENU"));
 
         TextView hint = new TextView(this);
-        hint.setText("D-pad + OK");
+        hint.setText("Double tap arrow: D-pad / Cursor");
         hint.setTextColor(Color.LTGRAY);
         hint.setGravity(Gravity.CENTER);
         hint.setTextSize(9);
@@ -999,10 +1033,10 @@ public class MainActivity extends Activity {
                 "User agent: " + uaMode,
                 "Dev blocker stats",
                 "Clear browsing data",
-                "About NuBrowse M6"
+                "About NuBrowse M6 R1"
         };
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M6")
+                .setTitle("NuBrowse M6 R1")
                 .setItems(items, (dialog, which) -> {
                     if (which == 0) showSavedList(KEY_BOOKMARKS, "Bookmarks");
                     else if (which == 1) showSavedList(KEY_HISTORY, "History");
@@ -1063,6 +1097,10 @@ public class MainActivity extends Activity {
         if ("Desktop".equals(uaMode)) settings.setUserAgentString(UA_DESKTOP);
         else if ("Mobile".equals(uaMode)) settings.setUserAgentString(UA_MOBILE);
         else settings.setUserAgentString(UA_TV);
+        boolean desktopLayout = !"Mobile".equals(uaMode);
+        settings.setUseWideViewPort(desktopLayout);
+        settings.setLoadWithOverviewMode(desktopLayout);
+        if (desktopLayout) webView.setInitialScale(0);
     }
 
     private int uaIndex() {
@@ -1154,8 +1192,8 @@ public class MainActivity extends Activity {
 
     private void showAbout() {
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M6")
-                .setMessage("TV Test Candidate\n\nM6: modern compact UI, system keyboard, true Fit mode at 100%, safe-area handling, floating Dev Remote and M5 blocker retained.")
+                .setTitle("NuBrowse M6 R1")
+                .setMessage("TV Test Candidate\n\nM6 R1: D-pad cursor mode, double-tap arrow mode switch, desktop TV layout optimisation, Fit at 100%, modern vector toolbar and M5 blocker retained.")
                 .setPositiveButton("OK", null)
                 .show();
     }
@@ -1166,6 +1204,19 @@ public class MainActivity extends Activity {
         button.setTextColor(Color.WHITE);
         button.setTextSize(15);
         button.setAllCaps(false);
+        button.setFocusable(true);
+        button.setFocusableInTouchMode(false);
+        button.setBackgroundResource(R.drawable.button_bg);
+        return button;
+    }
+
+    private ImageButton iconButton(int drawableRes, String description) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(drawableRes);
+        button.setColorFilter(Color.rgb(235, 238, 242));
+        button.setContentDescription(description);
+        button.setScaleType(ImageButton.ScaleType.CENTER_INSIDE);
+        button.setPadding(dp(9), dp(9), dp(9), dp(9));
         button.setFocusable(true);
         button.setFocusableInTouchMode(false);
         button.setBackgroundResource(R.drawable.button_bg);
@@ -1226,9 +1277,138 @@ public class MainActivity extends Activity {
         browserBack();
     }
 
+    private boolean isArrowKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+                keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
+    }
+
+    private void toggleCursorMode() {
+        cursorMode = !cursorMode;
+        lastArrowTapAt = 0L;
+        lastArrowTapKey = KeyEvent.KEYCODE_UNKNOWN;
+        if (cursorMode) {
+            initialiseCursorIfNeeded();
+            showCursor();
+            webView.requestFocus();
+            Toast.makeText(this, "CURSOR MODE", Toast.LENGTH_SHORT).show();
+        } else {
+            if (cursorIndicator != null) {
+                cursorIndicator.removeCallbacks(hideCursorRunnable);
+                cursorIndicator.setVisibility(View.GONE);
+            }
+            webView.requestFocus();
+            Toast.makeText(this, "D-PAD MODE", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void initialiseCursorIfNeeded() {
+        if (browserFrame == null) return;
+        int w = browserFrame.getWidth();
+        int h = browserFrame.getHeight();
+        if (w <= 0 || h <= 0) return;
+        if (cursorX < 0 || cursorY < 0) {
+            cursorX = w * 0.5f;
+            cursorY = h * 0.5f;
+        }
+        clampCursor();
+        positionCursorIndicator();
+    }
+
+    private void moveCursor(int keyCode, int repeatCount) {
+        if (browserFrame == null || webView == null) return;
+        initialiseCursorIfNeeded();
+        float step = dp(18 + Math.min(18, repeatCount * 2));
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) cursorX -= step;
+        else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) cursorX += step;
+        else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) cursorY -= step;
+        else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) cursorY += step;
+        clampCursor();
+        positionCursorIndicator();
+        sendCursorHover();
+        showCursor();
+    }
+
+    private void clampCursor() {
+        if (browserFrame == null) return;
+        float maxX = Math.max(dp(4), browserFrame.getWidth() - dp(8));
+        float maxY = Math.max(dp(4), browserFrame.getHeight() - dp(8));
+        cursorX = Math.max(dp(2), Math.min(maxX, cursorX));
+        cursorY = Math.max(dp(2), Math.min(maxY, cursorY));
+    }
+
+    private void positionCursorIndicator() {
+        if (cursorIndicator == null) return;
+        cursorIndicator.setX(cursorX - dp(3));
+        cursorIndicator.setY(cursorY - dp(3));
+        cursorIndicator.bringToFront();
+    }
+
+    private void showCursor() {
+        if (!cursorMode || cursorIndicator == null) return;
+        cursorIndicator.setVisibility(View.VISIBLE);
+        cursorIndicator.removeCallbacks(hideCursorRunnable);
+        cursorIndicator.postDelayed(hideCursorRunnable, 3000L);
+    }
+
+    private void sendCursorHover() {
+        if (webView == null) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        MotionEvent hover = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_MOVE, cursorX, cursorY, 0);
+        hover.setSource(InputDevice.SOURCE_MOUSE);
+        webView.dispatchGenericMotionEvent(hover);
+        hover.recycle();
+    }
+
+    private void clickCursor() {
+        if (webView == null) return;
+        initialiseCursorIfNeeded();
+        showCursor();
+        long now = android.os.SystemClock.uptimeMillis();
+        MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, cursorX, cursorY, 0);
+        down.setSource(InputDevice.SOURCE_MOUSE);
+        webView.dispatchTouchEvent(down);
+        down.recycle();
+        MotionEvent up = MotionEvent.obtain(now, now + 35L, MotionEvent.ACTION_UP, cursorX, cursorY, 0);
+        up.setSource(InputDevice.SOURCE_MOUSE);
+        webView.dispatchTouchEvent(up);
+        up.recycle();
+    }
+
+    private boolean handleArrowModeToggle(KeyEvent event) {
+        int keyCode = event.getKeyCode();
+        if (!isArrowKey(keyCode) || event.getAction() != KeyEvent.ACTION_DOWN || event.getRepeatCount() != 0) return false;
+        long now = event.getEventTime();
+        if (lastArrowTapKey == keyCode && now - lastArrowTapAt > 0 && now - lastArrowTapAt <= MODE_DOUBLE_TAP_MS) {
+            suppressArrowKeyUp = keyCode;
+            toggleCursorMode();
+            return true;
+        }
+        lastArrowTapKey = keyCode;
+        lastArrowTapAt = now;
+        return false;
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
+        int keyCode = event.getKeyCode();
+        if (event.getAction() == KeyEvent.ACTION_UP && keyCode == suppressArrowKeyUp) {
+            suppressArrowKeyUp = KeyEvent.KEYCODE_UNKNOWN;
+            return true;
+        }
+        if (handleArrowModeToggle(event)) return true;
+
+        if (cursorMode) {
+            if (isArrowKey(keyCode)) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) moveCursor(keyCode, event.getRepeatCount());
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) clickCursor();
+                return true;
+            }
+        }
+
+        if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_MENU) {
             showSettings();
             return true;
         }
@@ -1253,4 +1433,39 @@ public class MainActivity extends Activity {
         }
         super.onDestroy();
     }
+    private static final class CursorIndicatorView extends View {
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path pointer = new Path();
+
+        CursorIndicatorView(Context context) {
+            super(context);
+            fill.setColor(Color.WHITE);
+            fill.setStyle(Paint.Style.FILL);
+            stroke.setColor(Color.rgb(20, 22, 24));
+            stroke.setStyle(Paint.Style.STROKE);
+            stroke.setStrokeWidth(3f);
+            stroke.setStrokeJoin(Paint.Join.ROUND);
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float w = getWidth();
+            float h = getHeight();
+            pointer.reset();
+            pointer.moveTo(w * 0.12f, h * 0.08f);
+            pointer.lineTo(w * 0.82f, h * 0.58f);
+            pointer.lineTo(w * 0.53f, h * 0.63f);
+            pointer.lineTo(w * 0.69f, h * 0.93f);
+            pointer.lineTo(w * 0.53f, h * 0.99f);
+            pointer.lineTo(w * 0.38f, h * 0.68f);
+            pointer.lineTo(w * 0.17f, h * 0.88f);
+            pointer.close();
+            canvas.drawPath(pointer, fill);
+            canvas.drawPath(pointer, stroke);
+        }
+    }
+
 }

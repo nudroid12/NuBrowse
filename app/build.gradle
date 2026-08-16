@@ -10,8 +10,8 @@ android {
         applicationId 'com.nudroidlabs.nubrowse'
         minSdk 23
         targetSdk 35
-        versionCode 7
-        versionName '1.5.0-m6'
+        versionCode 8
+        versionName '1.5.1-m6-r1'
     }
 
     buildTypes {

@@ -1,4 +1,4 @@
-NuBrowse M6 may bundle the StevenBlack/hosts unified hosts list at build time.
+NuBrowse M6 R1 may bundle the StevenBlack/hosts unified hosts list at build time.
 
 StevenBlack/hosts
 Copyright (c) 2023 Steven Black
