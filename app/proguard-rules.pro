@@ -1,1 +1,1 @@
-# NuBrowse M3 currently has no custom ProGuard rules.
+# NuBrowse M4 currently has no custom ProGuard rules.
