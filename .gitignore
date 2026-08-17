@@ -5,3 +5,9 @@ local.properties
 /build/
 app/build/
 .DS_Store
+*.log
+*.apk
+*.aab
+captures/
+.cxx/
+.externalNativeBuild/
