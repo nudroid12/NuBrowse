@@ -11,7 +11,7 @@ android {
         minSdk 23
         targetSdk 35
         versionCode 8
-        versionName '1.5.1-m6-r2'
+        versionName '1.5.1-m6-r3'
     }
 
     buildTypes {
