@@ -1,0 +1,95 @@
+name: Apply ZIP Patch
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.[zZ][iI][pP]'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nubrowse-apply-zip
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v6
+      - name: Apply and commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob nocaseglob
+          patches=()
+          for candidate in *nubrowse*.zip; do
+            if [[ -f "$candidate" && ! -L "$candidate" ]]; then
+              patches+=("$candidate")
+            fi
+          done
+          if (( ${#patches[@]} == 0 )); then
+            echo "No NuBrowse ZIP patch in the repository root."
+            exit 1
+          fi
+          if (( ${#patches[@]} > 1 )); then
+            echo "::error::Multiple NuBrowse ZIP patches in the repository root. Keep only the patch you want to apply."
+            printf '  %s\n' "${patches[@]}"
+            exit 1
+          fi
+          patch="${patches[0]}"
+          python3 - "$patch" <<'PYTHON'
+          """Overlay root-relative NuBrowse application files from a ZIP."""
+          import stat
+          import sys
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+
+          MODULES = {"app"}
+          ROOT_FILES = {"settings.gradle", "build.gradle", "gradle.properties"}
+          MAX_BYTES = 100 * 1024 * 1024
+
+          with ZipFile(sys.argv[1]) as archive:
+              entries = [entry for entry in archive.infolist() if not entry.is_dir()]
+              if not entries or sum(entry.file_size for entry in entries) > MAX_BYTES:
+                  raise SystemExit("Patch is empty or exceeds 100 MiB uncompressed.")
+
+              seen = set()
+              for entry in entries:
+                  raw = entry.filename
+                  path = PurePosixPath(raw)
+                  safe_root = (path.parts and path.parts[0] in MODULES and len(path.parts) > 1)
+                  safe_file = raw in ROOT_FILES
+                  if (not (safe_root or safe_file) or path.as_posix() != raw or
+                          ".." in path.parts or "\\" in raw or raw in seen or
+                          stat.S_ISLNK(entry.external_attr >> 16)):
+                      raise SystemExit(f"Invalid patch entry: {raw!r}")
+                  destination = Path(raw)
+                  if any(part.is_symlink() for part in (destination, *destination.parents)):
+                      raise SystemExit(f"Symlink in destination: {raw!r}")
+                  if destination.exists() and not destination.is_file():
+                      raise SystemExit(f"Destination is not a file: {raw!r}")
+                  seen.add(raw)
+
+              for entry in entries:
+                  destination = Path(entry.filename)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  destination.write_bytes(archive.read(entry))
+
+          PYTHON
+          git --literal-pathspecs rm -- "$patch"
+          git add --all
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Apply NuBrowse patch [zip-applied]'
+          git push origin HEAD:refs/heads/main
+          git rev-parse HEAD > "${RUNNER_TEMP}/nubrowse-applied-sha.txt"
+      - name: Record applied commit
+        uses: actions/upload-artifact@v5
+        with:
+          name: nubrowse-applied-sha
+          path: ${{ runner.temp }}/nubrowse-applied-sha.txt
+          if-no-files-found: error
+          retention-days: 7
