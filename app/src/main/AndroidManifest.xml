@@ -8,7 +8,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
-        android:name=".NuBrowseApp"
+        android:name=".TVBrowserApp"
         android:allowBackup="true"
         android:banner="@drawable/tv_browser_banner"
         android:icon="@drawable/ic_launcher"

@@ -1,1 +1,1 @@
-# NuBrowse M6 R3 currently has no custom ProGuard rules.
+# TVBrowser currently has no custom ProGuard rules.

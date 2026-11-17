@@ -1,11 +1,11 @@
-package com.nudroidlabs.nubrowse;
+package com.tvbrowser.tv;
 
 import android.app.Application;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
 
-public class NuBrowseApp extends Application {
+public class TVBrowserApp extends Application {
     private static final String CRASH_PREFS = "nubrowse_runtime_diagnose";
     private static final String KEY_LAST_CRASH = "last_crash";
     private static final String KEY_PHASE = "startup_phase";
@@ -36,7 +36,7 @@ public class NuBrowseApp extends Application {
         SharedPreferences prefs = getSharedPreferences(CRASH_PREFS, MODE_PRIVATE);
         String phase = prefs.getString(KEY_PHASE, "unknown");
         StringBuilder out = new StringBuilder();
-        out.append("NUBROWSE RUNTIME DIAGNOSE\n");
+        out.append("TVBROWSER RUNTIME DIAGNOSE\n");
         out.append("=========================\n");
         out.append("APP: TVBrowser\n");
         out.append("PHASE: ").append(phase).append('\n');
@@ -66,7 +66,7 @@ public class NuBrowseApp extends Application {
         for (StackTraceElement frame : frames) {
             if (frame == null) continue;
             String className = frame.getClassName();
-            if (className.startsWith("com.nudroidlabs.nubrowse") || added < 3) {
+            if (className.startsWith("com.tvbrowser.tv") || added < 3) {
                 out.append("  at ").append(frame.toString()).append('\n');
                 added++;
             }

@@ -1,4 +1,4 @@
-package com.nudroidlabs.nubrowse;
+package com.tvbrowser.tv;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;

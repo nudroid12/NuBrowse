@@ -1,4 +1,4 @@
-# NuBrowse fallback network blocklist
+# TVBrowser fallback network blocklist
 doubleclick.net
 googlesyndication.com
 googleadservices.com

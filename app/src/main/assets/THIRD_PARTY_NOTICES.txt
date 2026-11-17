@@ -1,9 +1,9 @@
-NuBrowse M6 R3 may bundle the StevenBlack/hosts unified hosts list at build time.
+TVBrowser may bundle the StevenBlack/hosts unified hosts list at build time.
 
 StevenBlack/hosts
 Copyright (c) 2023 Steven Black
 License: MIT
 
 The complete MIT licence notice is fetched from the upstream repository during
-the GitHub Actions build when network access is available. NuBrowse retains a
+the GitHub Actions build when network access is available. TVBrowser retains a
 small built-in fallback blocklist if the upstream list cannot be downloaded.

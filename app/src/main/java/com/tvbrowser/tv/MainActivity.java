@@ -1,4 +1,4 @@
-package com.nudroidlabs.nubrowse;
+package com.tvbrowser.tv;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
@@ -137,9 +137,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        NuBrowseApp.markPhase(this, "activity_start");
+        TVBrowserApp.markPhase(this, "activity_start");
 
-        String lastCrash = NuBrowseApp.getLastCrash(this);
+        String lastCrash = TVBrowserApp.getLastCrash(this);
         if (lastCrash != null && !lastCrash.trim().isEmpty()) {
             showCrashRecovery(lastCrash);
             return;
@@ -148,7 +148,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         loadSettings();
         adBlocker = new AdBlocker(this);
-        NuBrowseApp.markPhase(this, "building_ui");
+        TVBrowserApp.markPhase(this, "building_ui");
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(17, 19, 21));
@@ -213,7 +213,7 @@ public class MainActivity extends Activity {
         progressBar.setMax(100);
         pageContainer.addView(progressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
 
-        NuBrowseApp.markPhase(this, "creating_webview");
+        TVBrowserApp.markPhase(this, "creating_webview");
         browserFrame = new FrameLayout(this);
         pageContainer.addView(browserFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -247,7 +247,7 @@ public class MainActivity extends Activity {
         browserFrame.addView(cursorIndicator, cursorParams);
 
         configureWebView();
-        NuBrowseApp.markPhase(this, "webview_configured");
+        TVBrowserApp.markPhase(this, "webview_configured");
 
         back.setOnClickListener(v -> browserBack());
         forward.setOnClickListener(v -> { if (webView.canGoForward()) webView.goForward(); });
@@ -270,7 +270,7 @@ public class MainActivity extends Activity {
             return false;
         });
 
-        NuBrowseApp.markPhase(this, "loading_initial_page");
+        TVBrowserApp.markPhase(this, "loading_initial_page");
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
         } else {
@@ -278,7 +278,7 @@ public class MainActivity extends Activity {
             webView.loadUrl(HOME_URL);
         }
         addressBar.requestFocus();
-        NuBrowseApp.markPhase(this, "running");
+        TVBrowserApp.markPhase(this, "running");
     }
 
     private void showCrashRecovery(String report) {
@@ -333,7 +333,7 @@ public class MainActivity extends Activity {
             }
         });
         retry.setOnClickListener(v -> {
-            NuBrowseApp.clearLastCrash(this);
+            TVBrowserApp.clearLastCrash(this);
             recreate();
         });
         copy.requestFocus();
@@ -582,7 +582,7 @@ public class MainActivity extends Activity {
         String js = "(function(){" +
                 "try{" +
                 "var d=document.documentElement,b=document.body;if(!d||!b)return;" +
-                "var id='nubrowse-tv-layout';var st=document.getElementById(id);" +
+                "var id='tvbrowser-tv-layout';var st=document.getElementById(id);" +
                 "if(!st){st=document.createElement('style');st.id=id;(document.head||d).appendChild(st);}" +
                 "st.textContent='img,video,svg,canvas{max-width:100%!important;height:auto;}iframe{max-width:100%!important;}';" +
                 "d.style.removeProperty('zoom');b.style.removeProperty('zoom');" +
@@ -596,17 +596,17 @@ public class MainActivity extends Activity {
         if (!adBlockEnabled) return;
         String js = "(function(){" +
                 "try{" +
-                "if(!window.__nubrowseCosmeticCount){window.__nubrowseCosmeticCount=0;}" +
+                "if(!window.__tvbrowserCosmeticCount){window.__tvbrowserCosmeticCount=0;}" +
                 "function hide(e){" +
-                "if(!e||e.nodeType!==1||e.getAttribute('data-nubrowse-hidden')==='1')return;" +
-                "e.setAttribute('data-nubrowse-hidden','1');" +
+                "if(!e||e.nodeType!==1||e.getAttribute('data-tvbrowser-hidden')==='1')return;" +
+                "e.setAttribute('data-tvbrowser-hidden','1');" +
                 "e.style.setProperty('display','none','important');" +
                 "e.style.setProperty('visibility','hidden','important');" +
                 "e.style.setProperty('height','0','important');" +
                 "e.style.setProperty('min-height','0','important');" +
                 "e.style.setProperty('margin','0','important');" +
                 "e.style.setProperty('padding','0','important');" +
-                "window.__nubrowseCosmeticCount++;" +
+                "window.__tvbrowserCosmeticCount++;" +
                 "}" +
                 "var selectors=[" +
                 "'ins.adsbygoogle','amp-ad','amp-embed[type=taboola]'," +
@@ -636,14 +636,14 @@ public class MainActivity extends Activity {
                 "});}catch(x){}" +
                 "}" +
                 "clean(document);" +
-                "if(!window.__nubrowseObserver&&document.documentElement){" +
-                "window.__nubrowseObserver=new MutationObserver(function(m){" +
-                "clearTimeout(window.__nubrowseAdTimer);" +
-                "window.__nubrowseAdTimer=setTimeout(function(){clean(document);},180);" +
+                "if(!window.__tvbrowserObserver&&document.documentElement){" +
+                "window.__tvbrowserObserver=new MutationObserver(function(m){" +
+                "clearTimeout(window.__tvbrowserAdTimer);" +
+                "window.__tvbrowserAdTimer=setTimeout(function(){clean(document);},180);" +
                 "});" +
-                "window.__nubrowseObserver.observe(document.documentElement,{childList:true,subtree:true});" +
+                "window.__tvbrowserObserver.observe(document.documentElement,{childList:true,subtree:true});" +
                 "}" +
-                "return window.__nubrowseCosmeticCount;" +
+                "return window.__tvbrowserCosmeticCount;" +
                 "}catch(e){return -1;}" +
                 "})()";
         webView.evaluateJavascript(js, null);
@@ -652,7 +652,7 @@ public class MainActivity extends Activity {
     private void showBlockStats() {
         if (webView == null) return;
         webView.evaluateJavascript(
-                "(function(){return window.__nubrowseCosmeticCount||0;})()",
+                "(function(){return window.__tvbrowserCosmeticCount||0;})()",
                 value -> {
                     String cosmetic = value == null ? "0" : value.replace("\"", "");
                     new AlertDialog.Builder(MainActivity.this)

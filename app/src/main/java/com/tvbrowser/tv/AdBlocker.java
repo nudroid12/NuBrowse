@@ -1,4 +1,4 @@
-package com.nudroidlabs.nubrowse;
+package com.tvbrowser.tv;
 
 import android.content.Context;
 import android.net.Uri;
@@ -49,7 +49,7 @@ final class AdBlocker {
         blockedHosts.addAll(Arrays.asList(BUILTIN_HOSTS));
         loadedRuleCount.set(blockedHosts.size());
         Context app = context.getApplicationContext();
-        Thread loader = new Thread(() -> loadAssetHosts(app), "NuBrowse-Blocklist");
+        Thread loader = new Thread(() -> loadAssetHosts(app), "TVBrowser-Blocklist");
         loader.setDaemon(true);
         loader.start();
     }
