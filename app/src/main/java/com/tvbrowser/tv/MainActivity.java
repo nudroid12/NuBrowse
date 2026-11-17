@@ -1,6 +1,7 @@
 package com.tvbrowser.tv;
 
 import android.Manifest;
+import com.nudroidlabs.tvadapter.TvAdapter;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -9,6 +10,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -130,6 +132,40 @@ public class MainActivity extends Activity {
     private String pendingDownloadUserAgent;
     private String pendingDownloadDisposition;
     private String pendingDownloadMime;
+
+    // The existing TVBrowser preview profile belongs to the host, not the reusable adapter.
+    private static final int TV_WIDTH = 1920;
+    private static final int TV_HEIGHT = 1080;
+    private static final int TV_DENSITY_DPI = 240;
+    private boolean useTvAdapter;
+
+    @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(base);
+        useTvAdapter = !TvAdapter.isTelevision(base);
+        if (!useTvAdapter) return;
+
+        Configuration tv = new Configuration();
+        tv.densityDpi = TV_DENSITY_DPI;
+        tv.fontScale = 1f;
+        tv.orientation = Configuration.ORIENTATION_LANDSCAPE;
+        tv.screenWidthDp = TV_WIDTH * 160 / TV_DENSITY_DPI;
+        tv.screenHeightDp = TV_HEIGHT * 160 / TV_DENSITY_DPI;
+        tv.smallestScreenWidthDp = tv.screenHeightDp;
+        applyOverrideConfiguration(tv);
+    }
+
+    @Override
+    public void setContentView(View content) {
+        if (!useTvAdapter) {
+            super.setContentView(content);
+            return;
+        }
+
+        TvAdapter adapter = new TvAdapter(this, content, TV_WIDTH, TV_HEIGHT);
+        super.setContentView(adapter);
+        adapter.requestApplyInsets();
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
