@@ -1,6 +1,7 @@
 package com.nudroidlabs.nubrowse;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -27,9 +28,16 @@ public final class TvPreviewActivity extends MainActivity {
     private static final float DEFAULT_REMOTE_SCALE = 1.2f;
     private static final float MAX_REMOTE_SCALE = 2f;
 
+    private boolean previewOnMobile;
+
     @Override
     protected void attachBaseContext(Context base) {
         super.attachBaseContext(base);
+        int mode = base.getResources().getConfiguration().uiMode & Configuration.UI_MODE_TYPE_MASK;
+        previewOnMobile = mode != Configuration.UI_MODE_TYPE_TELEVISION
+                && !base.getPackageManager().hasSystemFeature(PackageManager.FEATURE_LEANBACK);
+        if (!previewOnMobile) return;
+
         Configuration tv = new Configuration();
         tv.densityDpi = TV_DENSITY_DPI;
         tv.fontScale = 1f;
@@ -44,6 +52,10 @@ public final class TvPreviewActivity extends MainActivity {
 
     @Override
     public void setContentView(View browserContent) {
+        if (!previewOnMobile) {
+            super.setContentView(browserContent);
+            return;
+        }
         lastBrowserFocus = null;
         FrameLayout host = new FrameLayout(this);
         host.setBackgroundColor(Color.BLACK);
