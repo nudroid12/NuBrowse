@@ -1,4 +1,4 @@
-name: Apply ZIP Patch
+name: TVBrowser Apply ZIP Patch
 on:
   push:
     branches: [main]
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: nubrowse-apply-zip
+  group: tvbrowser-apply-zip
   cancel-in-progress: false
 
 jobs:
@@ -25,23 +25,23 @@ jobs:
           set -euo pipefail
           shopt -s nullglob nocaseglob
           patches=()
-          for candidate in *nubrowse*.zip; do
+          for candidate in TVBrowser-*.zip; do
             if [[ -f "$candidate" && ! -L "$candidate" ]]; then
               patches+=("$candidate")
             fi
           done
           if (( ${#patches[@]} == 0 )); then
-            echo "No NuBrowse ZIP patch in the repository root."
+            echo "No TVBrowser ZIP patch in the repository root."
             exit 1
           fi
           if (( ${#patches[@]} > 1 )); then
-            echo "::error::Multiple NuBrowse ZIP patches in the repository root. Keep only the patch you want to apply."
+            echo "::error::Multiple TVBrowser ZIP patches in the repository root. Keep only the patch you want to apply."
             printf '  %s\n' "${patches[@]}"
             exit 1
           fi
           patch="${patches[0]}"
           python3 - "$patch" <<'PYTHON'
-          """Overlay root-relative NuBrowse application files from a ZIP."""
+          """Overlay root-relative TVBrowser application files from a ZIP."""
           import stat
           import sys
           from pathlib import Path, PurePosixPath
@@ -78,18 +78,31 @@ jobs:
                   destination.parent.mkdir(parents=True, exist_ok=True)
                   destination.write_bytes(archive.read(entry))
 
+              # Remove migrated files only when their named replacements are in this ZIP.
+              for entry in entries:
+                  name = entry.filename
+                  parts = PurePosixPath(name).parts
+                  if len(parts) != 8 or parts[0:2] != ("app", "src") or parts[3:7] != ("java", "com", "tvbrowser", "tv"):
+                      continue
+                  legacy_name = "NuBrowseApp.java" if parts[7] == "TVBrowserApp.java" else parts[7]
+                  legacy = Path(*parts[:4], "com", "nudroidlabs", "nubrowse", legacy_name)
+                  if legacy.suffix == ".java" and not any(
+                      part.is_symlink() for part in (legacy, *legacy.parents)
+                  ) and legacy.is_file():
+                      legacy.unlink()
+
           PYTHON
           git --literal-pathspecs rm -- "$patch"
           git add --all
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Apply NuBrowse patch [zip-applied]'
+          git commit -m 'Apply TVBrowser patch [zip-applied]'
           git push origin HEAD:refs/heads/main
-          git rev-parse HEAD > "${RUNNER_TEMP}/nubrowse-applied-sha.txt"
+          git rev-parse HEAD > "${RUNNER_TEMP}/tvbrowser-applied-sha.txt"
       - name: Record applied commit
         uses: actions/upload-artifact@v5
         with:
-          name: nubrowse-applied-sha
-          path: ${{ runner.temp }}/nubrowse-applied-sha.txt
+          name: tvbrowser-applied-sha
+          path: ${{ runner.temp }}/tvbrowser-applied-sha.txt
           if-no-files-found: error
           retention-days: 7

@@ -15,7 +15,7 @@ on:
       - 'settings.gradle'
       - 'gradle.properties'
   workflow_run:
-    workflows: [Apply ZIP Patch]
+    workflows: [TVBrowser Apply ZIP Patch]
     types: [completed]
     branches: [main]
 
@@ -36,8 +36,8 @@ jobs:
         if: github.event_name == 'workflow_run'
         uses: actions/download-artifact@v5
         with:
-          name: nubrowse-applied-sha
-          path: ${{ runner.temp }}/nubrowse-apply
+          name: tvbrowser-applied-sha
+          path: ${{ runner.temp }}/tvbrowser-apply
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
       - name: Select build commit
@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           revision="$GITHUB_SHA"
           if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
-            revision="$(cat "$RUNNER_TEMP/nubrowse-apply/nubrowse-applied-sha.txt")"
+            revision="$(cat "$RUNNER_TEMP/tvbrowser-apply/tvbrowser-applied-sha.txt")"
           fi
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
           echo "sha=$revision" >> "$GITHUB_OUTPUT"
@@ -140,7 +140,7 @@ jobs:
             if [ "${rules:-0}" -ge 1000 ]; then
               cp "$tmp_domains" app/src/main/assets/blocked_hosts.txt
               cp "$tmp_license" app/src/main/assets/StevenBlack-LICENSE.txt
-              echo "NuBrowse network blocklist ready: $rules host rules."
+              echo "TVBrowser network blocklist ready: $rules host rules."
             else
               echo "Downloaded blocklist looked incomplete. Using bundled fallback rules."
             fi
