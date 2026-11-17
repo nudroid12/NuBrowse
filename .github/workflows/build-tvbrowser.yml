@@ -250,5 +250,25 @@ jobs:
           TAG: ${{ needs.build.outputs.tag }}
           ASSET: ${{ needs.build.outputs.asset }}
         run: |
-          gh release create "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY" \
+          set -euo pipefail
+          python3 - <<'PYFEED'
+          import json
+          import os
+          import re
+
+          tag = os.environ["TAG"]
+          apk = os.environ["ASSET"]
+          match = re.fullmatch(r"TVBrowser-([1-9][0-9]{0,8})[.]apk", apk)
+          if not match or not re.fullmatch(r"v[0-9]+[.][0-9]+[.][0-9]+", tag):
+              raise SystemExit("Invalid TVBrowser release metadata")
+          repo = os.environ["GITHUB_REPOSITORY"]
+          with open("update.json", "w", encoding="utf-8") as output:
+              json.dump({
+                  "tag": tag,
+                  "versionName": tag[1:],
+                  "versionCode": int(match[1]),
+                  "downloadUrl": f"https://github.com/{repo}/releases/download/{tag}/{apk}",
+              }, output)
+          PYFEED
+          gh release create "$TAG" "$ASSET" update.json --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --title "TVBrowser $TAG" --generate-notes --latest
