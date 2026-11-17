@@ -63,7 +63,54 @@ jobs:
         with:
           gradle-version: '9.4.1'
       - name: Prepare Android SDK
-        run: sdkmanager 'platforms;android-35' 'build-tools;36.0.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [[ ! -d "$sdk" ]]; then
+            sdk="$RUNNER_TEMP/android-sdk"
+          fi
+          mkdir -p "$sdk"
+          export ANDROID_HOME="$sdk" ANDROID_SDK_ROOT="$sdk"
+          printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\n' "$sdk" "$sdk" >> "$GITHUB_ENV"
+
+          missing=()
+          [[ -s "$sdk/platforms/android-35/android.jar" ]] || missing+=('platforms;android-35')
+          if [[ ! -x "$sdk/build-tools/36.0.0/aapt" || ! -x "$sdk/build-tools/36.0.0/apksigner" ]]; then
+            missing+=('build-tools;36.0.0')
+          fi
+          if (( ${#missing[@]} == 0 )); then
+            echo "Android SDK packages already installed at $sdk"
+            exit 0
+          fi
+
+          manager="$(command -v sdkmanager || true)"
+          if [[ -z "$manager" ]]; then
+            shopt -s nullglob
+            for candidate in "$sdk"/cmdline-tools/latest/bin/sdkmanager "$sdk"/cmdline-tools/*/bin/sdkmanager; do
+              if [[ -x "$candidate" ]]; then
+                manager="$candidate"
+                break
+              fi
+            done
+          fi
+          if [[ -z "$manager" ]]; then
+            cli="$(mktemp -d "$RUNNER_TEMP/android-cli.XXXXXX")"
+            trap 'rm -rf -- "$cli"' EXIT
+            curl --fail --silent --show-error --location --retry 3 \
+              'https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip' \
+              -o "$cli/tools.zip"
+            unzip -q "$cli/tools.zip" -d "$cli"
+            manager="$cli/cmdline-tools/bin/sdkmanager"
+          fi
+          # yes can get SIGPIPE when sdkmanager finishes reading.
+          set +o pipefail
+          yes | "$manager" --sdk_root="$sdk" --licenses >/dev/null
+          set -o pipefail
+          "$manager" --sdk_root="$sdk" --install "${missing[@]}"
+          test -s "$sdk/platforms/android-35/android.jar"
+          test -x "$sdk/build-tools/36.0.0/aapt"
+          test -x "$sdk/build-tools/36.0.0/apksigner"
       - name: Refresh network blocklist for APK
         continue-on-error: true
         shell: bash
