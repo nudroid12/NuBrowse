@@ -1,7 +1,6 @@
 package com.tvbrowser.tv;
 
 import android.Manifest;
-import com.nudroidlabs.tvadapter.TvAdapter;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -10,7 +9,6 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.res.Configuration;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -84,8 +82,8 @@ public class MainActivity extends Activity {
     private static final int REQUEST_WRITE_STORAGE = 130;
     private static final long OK_DOUBLE_TAP_MS = 330L;
 
-    private WebView webView;
     private final AppUpdater updater = new AppUpdater(this);
+    private WebView webView;
     private EditText addressBar;
     private ProgressBar progressBar;
     private FrameLayout root;
@@ -132,40 +130,6 @@ public class MainActivity extends Activity {
     private String pendingDownloadUserAgent;
     private String pendingDownloadDisposition;
     private String pendingDownloadMime;
-
-    // The existing TVBrowser preview profile belongs to the host, not the reusable adapter.
-    private static final int TV_WIDTH = 1920;
-    private static final int TV_HEIGHT = 1080;
-    private static final int TV_DENSITY_DPI = 240;
-    private boolean useTvAdapter;
-
-    @Override
-    protected void attachBaseContext(Context base) {
-        super.attachBaseContext(base);
-        useTvAdapter = !TvAdapter.isTelevision(base);
-        if (!useTvAdapter) return;
-
-        Configuration tv = new Configuration();
-        tv.densityDpi = TV_DENSITY_DPI;
-        tv.fontScale = 1f;
-        tv.orientation = Configuration.ORIENTATION_LANDSCAPE;
-        tv.screenWidthDp = TV_WIDTH * 160 / TV_DENSITY_DPI;
-        tv.screenHeightDp = TV_HEIGHT * 160 / TV_DENSITY_DPI;
-        tv.smallestScreenWidthDp = tv.screenHeightDp;
-        applyOverrideConfiguration(tv);
-    }
-
-    @Override
-    public void setContentView(View content) {
-        if (!useTvAdapter) {
-            super.setContentView(content);
-            return;
-        }
-
-        TvAdapter adapter = new TvAdapter(this, content, TV_WIDTH, TV_HEIGHT);
-        super.setContentView(adapter);
-        adapter.requestApplyInsets();
-    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -899,7 +863,6 @@ public class MainActivity extends Activity {
                 "User agent: " + uaMode,
                 "Blocker stats",
                 "Clear browsing data",
-                "Check for updates",
                 "About TVBrowser"
         };
         new AlertDialog.Builder(this)
@@ -930,8 +893,6 @@ public class MainActivity extends Activity {
                     } else if (which == 8) {
                         clearBrowserData();
                     } else if (which == 9) {
-                        updater.check();
-                    } else {
                         showAbout();
                     }
                 })
@@ -1052,12 +1013,23 @@ public class MainActivity extends Activity {
         pendingDownloadMime = null;
     }
 
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (PackageManager.NameNotFoundException e) {
+            return "unknown";
+        }
+    }
+
     private void showAbout() {
-        new AlertDialog.Builder(this)
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
                 .setTitle("TVBrowser")
-                .setMessage("Version " + updater.versionName())
-                .setPositiveButton("OK", null)
-                .show();
+                .setMessage("Version " + versionName())
+                .setPositiveButton("OK", null);
+        if ("com.tvbrowser.tv".equals(getPackageName())) {
+            dialog.setNeutralButton("Check for updates", (view, which) -> updater.check());
+        }
+        dialog.show();
     }
 
     private Button button(String text) {
@@ -1338,7 +1310,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        webView.saveState(outState);
+        if (webView != null) webView.saveState(outState);
         super.onSaveInstanceState(outState);
     }
 

@@ -14,34 +14,26 @@ android {
         applicationId 'com.tvbrowser.tv'
         minSdk 23
         targetSdk 35
-        versionCode 10
-        def updateRepo = System.getenv('GITHUB_REPOSITORY') ?: ''
+        versionCode 1
+        def updateRepo = System.getenv('GITHUB_REPOSITORY') ?: 'nudroid12/TVBrowser'
         resValue 'string', 'update_repo', updateRepo
-        versionName '1.6.1'
-    }
-
-    def signingFile = System.getenv('TVBROWSER_KEYSTORE_FILE')
-    if (signingFile) {
-        signingConfigs {
-            release {
-                storeFile file(signingFile)
-                storePassword System.getenv('TVBROWSER_KEYSTORE_PASSWORD')
-                keyAlias System.getenv('TVBROWSER_KEY_ALIAS')
-                keyPassword storePassword
-            }
-        }
+        versionName '0.0.1'
     }
 
     buildTypes {
-        release {
-            if (signingFile) signingConfig signingConfigs.release
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        debug {
+            applicationIdSuffix '.debug'
         }
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType('release')) { variant ->
+        variant.enable = false
     }
 }
