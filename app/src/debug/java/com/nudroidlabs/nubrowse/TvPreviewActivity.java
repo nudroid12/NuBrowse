@@ -23,6 +23,9 @@ public final class TvPreviewActivity extends MainActivity {
     private static final int TV_WIDTH = 1920;
     private static final int TV_HEIGHT = 1080;
     private static final int TV_DENSITY_DPI = 240;
+    private static final float MIN_REMOTE_SCALE = 0.85f;
+    private static final float DEFAULT_REMOTE_SCALE = 1.2f;
+    private static final float MAX_REMOTE_SCALE = 2f;
 
     @Override
     protected void attachBaseContext(Context base) {
@@ -98,49 +101,94 @@ public final class TvPreviewActivity extends MainActivity {
         addRemoteKey(bottom, browserContent, "↓", "Down", KeyEvent.KEYCODE_DPAD_DOWN);
         addSpacer(bottom);
 
-        addRemoteKey(addRemoteRow(panel), browserContent, "Back", "Back", KeyEvent.KEYCODE_BACK);
+        LinearLayout footer = addRemoteRow(panel);
+        addRemoteKey(footer, browserContent, "Back", "Back", KeyEvent.KEYCODE_BACK);
+        Button resize = remoteButton("↘", "Drag to resize remote");
+        LinearLayout.LayoutParams resizeParams = new LinearLayout.LayoutParams(dp(34), -1);
+        resizeParams.setMargins(dp(2), dp(2), dp(2), dp(2));
+        footer.addView(resize, resizeParams);
 
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(144),
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.RIGHT);
-        params.rightMargin = dp(18);
-        params.bottomMargin = dp(16);
-        stage.addView(panel, params);
-        installDragGrip(stage, panel, grip);
+        panel.setPivotX(0);
+        panel.setPivotY(0);
+        panel.setVisibility(View.INVISIBLE);
+        stage.addView(panel, new FrameLayout.LayoutParams(dp(144),
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.LEFT));
+        installRemoteGesture(stage, panel, grip, false);
+        installRemoteGesture(stage, panel, resize, true);
+        stage.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop,
+                oldRight, oldBottom) -> {
+            boolean firstLayout = panel.getVisibility() == View.INVISIBLE;
+            float x = firstLayout ? stage.getWidth() - panel.getWidth()
+                    * DEFAULT_REMOTE_SCALE - dp(16) : panel.getX();
+            float y = firstLayout ? stage.getHeight() - panel.getHeight()
+                    * DEFAULT_REMOTE_SCALE - dp(16) : panel.getY();
+            placeRemote(stage, panel, x, y,
+                    firstLayout ? DEFAULT_REMOTE_SCALE : panel.getScaleX());
+            panel.setVisibility(View.VISIBLE);
+        });
     }
 
-    private void installDragGrip(FrameLayout stage, View panel, Button grip) {
-        grip.setOnTouchListener(new View.OnTouchListener() {
-            private float offsetX;
-            private float offsetY;
+    private void installRemoteGesture(FrameLayout stage, View panel, Button handle,
+            boolean resize) {
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            private float touchX;
+            private float touchY;
+            private float startX;
+            private float startY;
+            private float startScale;
+            private boolean active;
 
             @Override
             public boolean onTouch(View view, MotionEvent event) {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
-                        offsetX = event.getRawX() - panel.getX();
-                        offsetY = event.getRawY() - panel.getY();
+                        touchX = event.getRawX();
+                        touchY = event.getRawY();
+                        startX = panel.getX();
+                        startY = panel.getY();
+                        startScale = panel.getScaleX();
+                        active = true;
+                        handle.setPressed(true);
                         return true;
                     case MotionEvent.ACTION_MOVE:
-                        positionRemote(stage, panel, event.getRawX() - offsetX,
-                                event.getRawY() - offsetY);
+                        if (!active) return true;
+                        float dx = event.getRawX() - touchX;
+                        float dy = event.getRawY() - touchY;
+                        if (resize) {
+                            float width = panel.getWidth();
+                            float height = panel.getHeight();
+                            // Project the drag onto the corner diagonal to scale both axes evenly.
+                            float delta = (width * dx + height * dy)
+                                    / (width * width + height * height);
+                            placeRemote(stage, panel, startX, startY, startScale + delta);
+                        } else {
+                            placeRemote(stage, panel, startX + dx, startY + dy, startScale);
+                        }
                         return true;
+                    case MotionEvent.ACTION_POINTER_DOWN:
                     case MotionEvent.ACTION_UP:
-                        view.performClick();
-                        return true;
                     case MotionEvent.ACTION_CANCEL:
+                        active = false;
+                        handle.setPressed(false);
                         return true;
                     default:
-                        return false;
+                        return true;
                 }
             }
         });
-        stage.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop,
-                oldRight, oldBottom) -> positionRemote(stage, panel, panel.getX(), panel.getY()));
     }
 
-    private void positionRemote(FrameLayout stage, View panel, float x, float y) {
-        panel.setX(Math.max(0, Math.min(x, stage.getWidth() - panel.getWidth())));
-        panel.setY(Math.max(0, Math.min(y, stage.getHeight() - panel.getHeight())));
+    private void placeRemote(FrameLayout stage, View panel, float x, float y, float scale) {
+        if (panel.getWidth() == 0 || panel.getHeight() == 0
+                || stage.getWidth() == 0 || stage.getHeight() == 0) return;
+
+        float fit = Math.min(stage.getWidth() / (float) panel.getWidth(),
+                stage.getHeight() / (float) panel.getHeight());
+        scale = Math.min(fit, Math.min(MAX_REMOTE_SCALE, Math.max(MIN_REMOTE_SCALE, scale)));
+        panel.setScaleX(scale);
+        panel.setScaleY(scale);
+        panel.setX(Math.max(0, Math.min(x, stage.getWidth() - panel.getWidth() * scale)));
+        panel.setY(Math.max(0, Math.min(y, stage.getHeight() - panel.getHeight() * scale)));
     }
 
     private LinearLayout addRemoteRow(LinearLayout panel) {
