@@ -115,7 +115,7 @@ public final class TvPreviewActivity extends MainActivity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.LEFT));
         installRemoteGesture(stage, panel, grip, false);
         installRemoteGesture(stage, panel, resize, true);
-        stage.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop,
+        stage.addOnLayoutChangeListener((view, left, top, right, stageBottom, oldLeft, oldTop,
                 oldRight, oldBottom) -> {
             boolean firstLayout = panel.getVisibility() == View.INVISIBLE;
             float x = firstLayout ? stage.getWidth() - panel.getWidth()
