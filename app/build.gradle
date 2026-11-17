@@ -6,6 +6,10 @@ android {
     namespace 'com.nudroidlabs.nubrowse'
     compileSdk 35
 
+    buildFeatures {
+        resValues = true
+    }
+
     defaultConfig {
         applicationId 'com.tvbrowser.tv'
         minSdk 23
