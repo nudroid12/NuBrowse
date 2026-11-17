@@ -83,6 +83,7 @@ public class MainActivity extends Activity {
     private static final long OK_DOUBLE_TAP_MS = 330L;
 
     private WebView webView;
+    private final AppUpdater updater = new AppUpdater(this);
     private EditText addressBar;
     private ProgressBar progressBar;
     private FrameLayout root;
@@ -291,7 +292,7 @@ public class MainActivity extends Activity {
         crashRoot.addView(body, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         TextView title = new TextView(this);
-        title.setText("NuBrowse recovered a runtime crash");
+        title.setText("TVBrowser recovered a runtime crash");
         title.setTextColor(Color.WHITE);
         title.setTextSize(22);
         body.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
@@ -327,7 +328,7 @@ public class MainActivity extends Activity {
         copy.setOnClickListener(v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText("NuBrowse runtime diagnose", report));
+                cm.setPrimaryClip(ClipData.newPlainText("TVBrowser runtime diagnose", report));
                 Toast.makeText(this, "Diagnose copied", Toast.LENGTH_SHORT).show();
             }
         });
@@ -539,7 +540,7 @@ public class MainActivity extends Activity {
             @Override
             public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
                 new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("NuBrowse")
+                        .setTitle("TVBrowser")
                         .setMessage(message)
                         .setPositiveButton("OK", (d, w) -> result.confirm())
                         .setOnCancelListener(d -> result.cancel())
@@ -862,10 +863,11 @@ public class MainActivity extends Activity {
                 "User agent: " + uaMode,
                 "Blocker stats",
                 "Clear browsing data",
-                "About NuBrowse M6 R3"
+                "Check for updates",
+                "About TVBrowser"
         };
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M6 R3")
+                .setTitle("TVBrowser")
                 .setItems(items, (dialog, which) -> {
                     if (which == 0) showSavedList(KEY_BOOKMARKS, "Bookmarks");
                     else if (which == 1) showSavedList(KEY_HISTORY, "History");
@@ -891,6 +893,8 @@ public class MainActivity extends Activity {
                         showBlockStats();
                     } else if (which == 8) {
                         clearBrowserData();
+                    } else if (which == 9) {
+                        updater.check();
                     } else {
                         showAbout();
                     }
@@ -967,7 +971,7 @@ public class MainActivity extends Activity {
             String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
             request.setTitle(fileName);
-            request.setDescription("Downloading with NuBrowse");
+            request.setDescription("Downloading with TVBrowser");
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
             request.setAllowedOverMetered(true);
             request.setAllowedOverRoaming(true);
@@ -1014,8 +1018,8 @@ public class MainActivity extends Activity {
 
     private void showAbout() {
         new AlertDialog.Builder(this)
-                .setTitle("NuBrowse M6 R3")
-                .setMessage("TV Test Candidate\n\nM6 R3 removes the development floating remote, removes forced 1280 CSS viewport injection, restores natural WebView fitting, adds physical TV remote page scrolling, keeps double-tap OK cursor mode, exit confirmation and the M5 blocker.")
+                .setTitle("TVBrowser")
+                .setMessage("Version " + updater.versionName())
                 .setPositiveButton("OK", null)
                 .show();
     }
@@ -1068,7 +1072,7 @@ public class MainActivity extends Activity {
     private void showExitConfirmation() {
         if (isFinishing() || isDestroyed()) return;
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Exit NuBrowse?")
+                .setTitle("Exit TVBrowser?")
                 .setMessage("Do you want to close the browser?")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Exit", (d, which) -> finish())
@@ -1304,6 +1308,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        updater.close();
         pendingSingleOk = false;
         inputHandler.removeCallbacks(pendingSingleOkRunnable);
         if (webView != null) {
