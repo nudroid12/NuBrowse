@@ -491,12 +491,14 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageCommitVisible(WebView view, String url) {
+                installPageMenuTracking(view);
                 injectTvPageOptimisation();
                 injectCosmeticAdCleanup();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                installPageMenuTracking(view);
                 if (url != null && !url.isEmpty()) currentPageUrl = url;
                 if (!addressEditing) addressBar.setText(url);
                 recordHistory(url, view.getTitle());
@@ -1138,6 +1140,32 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    private void installPageMenuTracking(WebView view) {
+        view.evaluateJavascript("""
+                (() => {
+                    if (window.__tvbrowserPageMenu) return;
+                    const menuSelector = '[role="menu"],[role="listbox"]';
+                    const state = window.__tvbrowserPageMenu = {};
+                    let opener;
+                    let clickedAt;
+                    document.addEventListener('click', event => {
+                        const button = event.target.closest?.('button,[role="button"],[aria-haspopup],[popovertarget]');
+                        if (!button || button.closest(menuSelector)) return;
+                        opener = button;
+                        clickedAt = performance.now();
+                    }, true);
+                    document.addEventListener('focusin', event => {
+                        const menu = event.target.closest?.(menuSelector);
+                        if (menu && opener?.isConnected && performance.now() - clickedAt < 750) {
+                            state.menu = menu;
+                            state.opener = opener;
+                            opener = null;
+                        }
+                    }, true);
+                })()
+                """, null);
+    }
+
     private boolean checkingPageBack;
 
     private void browserBack() {
@@ -1161,39 +1189,60 @@ public class MainActivity extends Activity {
                     const popover = CSS.supports('selector(:popover-open)') ? ':popover-open' : '';
                     const selector = '[role="menu"],[role="listbox"],[role="dialog"],dialog[open]'
                         + (popover ? ',' + popover : '');
-                    const surface = focused?.closest(selector)
-                        || Array.from(document.querySelectorAll(selector)).filter(visible).at(-1);
+                    const focusedSurface = focused?.closest(selector);
+                    const surface = visible(focusedSurface) ? focusedSurface
+                        : Array.from(document.querySelectorAll(selector)).filter(visible).pop();
+                    const isMenu = surface?.matches('[role="menu"],[role="listbox"]');
+                    const state = window.__tvbrowserPageMenu;
+                    const trackedOpener = state?.menu === surface && visible(state?.opener)
+                        ? state.opener : null;
 
-                    const toggles = Array.from(document.querySelectorAll('[aria-expanded="true"][aria-haspopup]'))
-                        .filter(node => node.getAttribute('aria-haspopup') !== 'false' && visible(node));
-                    const controlsSurface = node => surface && surface.id
-                        && ['aria-controls', 'aria-owns'].some(attr =>
+                    const toggles = Array.from(document.querySelectorAll(
+                        '[aria-expanded="true"],[popovertarget]')).filter(visible);
+                    const controlsSurface = node => surface?.id
+                        && ['aria-controls', 'aria-owns', 'popovertarget'].some(attr =>
                             (node.getAttribute(attr) || '').split(/\\s+/).includes(surface.id));
-                    const toggle = toggles.find(controlsSurface) || toggles.find(node => node === focused)
-                        || (surface && surface.matches('[role="menu"],[role="listbox"]')
-                            && toggles.length === 1 ? toggles[0] : null);
-                    if (!visible(surface) && !toggle) return false;
+                    const popupToggles = toggles.filter(node => node.matches(
+                        '[aria-expanded="true"][aria-haspopup]:not([aria-haspopup="false"])'));
+                    const toggle = toggles.find(controlsSurface) || trackedOpener
+                        || popupToggles.find(node => node === focused)
+                        || (isMenu && popupToggles.length === 1 ? popupToggles[0] : null);
+                    if (!surface && !toggle) return false;
 
+                    const restoreFocus = () => {
+                        if (visible(toggle)) toggle.focus({preventScroll: true});
+                        if (trackedOpener) {
+                            delete state.menu;
+                            delete state.opener;
+                        }
+                    };
+                    const closed = () => (!surface || !visible(surface)) &&
+                        toggle?.getAttribute('aria-expanded') !== 'true';
                     const target = surface && !surface.contains(focused) ? surface : focused || toggle;
                     const escape = new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
                         bubbles: true, cancelable: true, composed: true
                     });
-                    if (!target.dispatchEvent(escape) || (surface && !visible(surface))) return true;
-                    if (toggle && toggle.getAttribute('aria-expanded') !== 'true') return true;
-
-                    if (popover && surface?.matches(popover)) {
-                        surface.hidePopover();
+                    const handled = !target.dispatchEvent(escape);
+                    if (closed()) {
+                        restoreFocus();
                         return true;
                     }
-                    if (surface?.matches('dialog[open]')) {
-                        if (typeof surface.requestClose === 'function') surface.requestClose();
-                        else surface.close();
-                        return true;
-                    }
-                    if (!toggle) return false;
-                    toggle.click();
-                    toggle.focus({preventScroll: true});
+                    requestAnimationFrame(() => {
+                        if (!closed() && !handled) {
+                            if (popover && surface?.matches(popover)) {
+                                surface.hidePopover();
+                            } else if (surface?.matches('dialog[open]')) {
+                                if (typeof surface.requestClose === 'function') surface.requestClose();
+                                else surface.close();
+                            } else if (visible(toggle) && (toggle.getAttribute('aria-expanded') === 'true'
+                                    || (visible(surface) && toggle.getAttribute('aria-expanded') !== 'false'))) {
+                                toggle.click();
+                            }
+                        }
+                        if (closed()) restoreFocus();
+                        else requestAnimationFrame(() => { if (closed()) restoreFocus(); });
+                    });
                     return true;
                 })()
                 """, dismissed -> {

@@ -14,10 +14,10 @@ android {
         applicationId 'com.tvbrowser.tv'
         minSdk 23
         targetSdk 35
-        versionCode 15
+        versionCode 16
         def updateRepo = System.getenv('GITHUB_REPOSITORY') ?: 'nudroid12/TVBrowser'
         resValue 'string', 'update_repo', updateRepo
-        versionName '0.0.5'
+        versionName '0.0.6'
     }
 
     def signingFile = System.getenv('TVBROWSER_KEYSTORE_FILE')
@@ -58,7 +58,7 @@ android {
 androidComponents {
     onVariants(selector().withBuildType('debug')) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(5)
+            output.versionCode.set(6)
         }
     }
 }
