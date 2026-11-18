@@ -49,6 +49,7 @@ jobs:
 
           MODULES = {"app"}
           ROOT_FILES = {"settings.gradle", "build.gradle", "gradle.properties"}
+          ADAPTER_FILES = {"tvadapter/TvAdapter.java", "tvadapter/TvPreviewDisplay.java"}
           MAX_BYTES = 100 * 1024 * 1024
 
           with ZipFile(sys.argv[1]) as archive:
@@ -61,7 +62,7 @@ jobs:
                   raw = entry.filename
                   path = PurePosixPath(raw)
                   safe_root = (path.parts and path.parts[0] in MODULES and len(path.parts) > 1)
-                  safe_file = raw in ROOT_FILES
+                  safe_file = raw in ROOT_FILES or raw in ADAPTER_FILES
                   if (not (safe_root or safe_file) or path.as_posix() != raw or
                           ".." in path.parts or "\\" in raw or raw in seen or
                           stat.S_ISLNK(entry.external_attr >> 16)):
