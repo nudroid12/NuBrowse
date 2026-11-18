@@ -34,6 +34,7 @@ final class AppUpdater {
     static final String APK_NAME = "tvbrowser-update.apk";
     static final String MIME = "application/vnd.android.package-archive";
     private static final Pattern ASSET = Pattern.compile("TVBrowser-([1-9][0-9]{0,8})\\.apk");
+    private static final Pattern DEBUG_ASSET = Pattern.compile("TVBrowser-debug-([1-9][0-9]{0,8})\\.apk");
     private static final int MAX_APK_BYTES = 100 * 1024 * 1024;
     private final Activity activity;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -61,7 +62,7 @@ final class AppUpdater {
         }
         run("Checking for updates…", () -> findUpdate(repo), update -> {
             if (update == null) {
-                message("No newer TVBrowser release found.");
+                message("No newer TVBrowser build found for this version.");
                 return;
             }
             new AlertDialog.Builder(activity)
@@ -74,7 +75,10 @@ final class AppUpdater {
     }
 
     private Update findUpdate(String repo) throws Exception {
-        HttpURLConnection connection = open("https://api.github.com/repos/" + repo + "/releases/latest");
+        boolean debug = activity.getPackageName().endsWith(".debug");
+        String endpoint = debug ? "/releases/tags/debug-updates" : "/releases/latest";
+        Pattern apkName = debug ? DEBUG_ASSET : ASSET;
+        HttpURLConnection connection = open("https://api.github.com/repos/" + repo + endpoint);
         connection.setRequestProperty("Accept", "application/vnd.github+json");
         try {
             int status = connection.getResponseCode();
@@ -93,7 +97,7 @@ final class AppUpdater {
             for (int i = 0; i < assets.length(); i++) {
                 JSONObject asset = assets.getJSONObject(i);
                 String name = asset.getString("name");
-                Matcher matcher = ASSET.matcher(name);
+                Matcher matcher = apkName.matcher(name);
                 if (!matcher.matches()) continue;
                 foundApk = true;
                 long version = Long.parseLong(matcher.group(1));
@@ -101,10 +105,10 @@ final class AppUpdater {
                 String prefix = "https://github.com/" + repo + "/releases/download/";
                 if (version > highest && url.startsWith(prefix) && url.endsWith("/" + name)) {
                     highest = version;
-                    result = new Update(tag, url, version);
+                    result = new Update(debug ? "Debug build " + version : tag, url, version);
                 }
             }
-            if (!foundApk) throw new IOException("The latest release has no TVBrowser APK.");
+            if (!foundApk) throw new IOException("No TVBrowser APK found for this update channel.");
             return result;
         } finally {
             connection.disconnect();

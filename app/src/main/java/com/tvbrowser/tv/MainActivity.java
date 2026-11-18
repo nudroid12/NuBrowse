@@ -1026,9 +1026,7 @@ public class MainActivity extends Activity {
                 .setTitle("TVBrowser")
                 .setMessage("Version " + versionName())
                 .setPositiveButton("OK", null);
-        if ("com.tvbrowser.tv".equals(getPackageName())) {
-            dialog.setNeutralButton("Check for updates", (view, which) -> updater.check());
-        }
+        dialog.setNeutralButton("Check for updates", (view, which) -> updater.check());
         dialog.show();
     }
 
