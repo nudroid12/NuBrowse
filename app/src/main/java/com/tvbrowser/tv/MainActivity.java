@@ -85,6 +85,7 @@ public class MainActivity extends Activity {
     private final AppUpdater updater = new AppUpdater(this);
     private WebView webView;
     private EditText addressBar;
+    private LinearLayout toolbar;
     private ProgressBar progressBar;
     private FrameLayout root;
     private FrameLayout fullscreenContainer;
@@ -159,7 +160,7 @@ public class MainActivity extends Activity {
         root.addView(pageContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         installSafeAreaInsets();
 
-        LinearLayout toolbar = new LinearLayout(this);
+        toolbar = new LinearLayout(this);
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.setPadding(dp(7), dp(4), dp(7), dp(4));
@@ -1268,21 +1269,24 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    private boolean handleTvPageScroll(KeyEvent event) {
-        if (cursorMode || webView == null) return false;
+    private boolean handleTvVerticalNavigation(KeyEvent event) {
         int keyCode = event.getKeyCode();
         if (keyCode != KeyEvent.KEYCODE_DPAD_DOWN && keyCode != KeyEvent.KEYCODE_DPAD_UP) return false;
+        if (cursorMode || customView != null || webView == null || toolbar == null) return false;
 
         View focused = getCurrentFocus();
-        if (focused != webView) return false;
+        if (event.getAction() != KeyEvent.ACTION_DOWN) return focused == webView;
 
-        if (event.getAction() == KeyEvent.ACTION_UP) return true;
-        if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+        if (focused != webView) {
+            return keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                    && focused != null && focused.getParent() == toolbar
+                    && webView.requestFocus(View.FOCUS_DOWN);
+        }
 
         if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
             webView.pageDown(false);
-        } else {
-            webView.pageUp(false);
+        } else if (!webView.pageUp(false)) {
+            addressBar.requestFocus(View.FOCUS_UP);
         }
         return true;
     }
@@ -1297,7 +1301,7 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        if (handleTvPageScroll(event)) return true;
+        if (handleTvVerticalNavigation(event)) return true;
 
         if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_MENU) {
             showSettings();
