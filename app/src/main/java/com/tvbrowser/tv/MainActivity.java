@@ -1126,10 +1126,74 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    private boolean checkingPageBack;
+
     private void browserBack() {
         if (customView != null) {
             hideCustomView();
-        } else if (webView != null && webView.canGoBack()) {
+            return;
+        }
+        if (webView == null) {
+            goBackInHistory();
+            return;
+        }
+        if (checkingPageBack) return;
+        checkingPageBack = true;
+        final String currentUrl = webView.getUrl();
+        webView.evaluateJavascript("""
+                (() => {
+                    const focused = document.activeElement;
+                    const visible = node => node && node.getClientRects().length > 0
+                        && getComputedStyle(node).visibility === 'visible'
+                        && !node.closest('[inert], [aria-hidden="true"]');
+                    const popover = CSS.supports('selector(:popover-open)') ? ':popover-open' : '';
+                    const selector = '[role="menu"],[role="listbox"],[role="dialog"],dialog[open]'
+                        + (popover ? ',' + popover : '');
+                    const surface = focused?.closest(selector)
+                        || Array.from(document.querySelectorAll(selector)).filter(visible).at(-1);
+
+                    const toggles = Array.from(document.querySelectorAll('[aria-expanded="true"][aria-haspopup]'))
+                        .filter(node => node.getAttribute('aria-haspopup') !== 'false' && visible(node));
+                    const controlsSurface = node => surface && surface.id
+                        && ['aria-controls', 'aria-owns'].some(attr =>
+                            (node.getAttribute(attr) || '').split(/\\s+/).includes(surface.id));
+                    const toggle = toggles.find(controlsSurface) || toggles.find(node => node === focused)
+                        || (surface && surface.matches('[role="menu"],[role="listbox"]')
+                            && toggles.length === 1 ? toggles[0] : null);
+                    if (!visible(surface) && !toggle) return false;
+
+                    const target = surface && !surface.contains(focused) ? surface : focused || toggle;
+                    const escape = new KeyboardEvent('keydown', {
+                        key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
+                        bubbles: true, cancelable: true, composed: true
+                    });
+                    if (!target.dispatchEvent(escape) || (surface && !visible(surface))) return true;
+                    if (toggle && toggle.getAttribute('aria-expanded') !== 'true') return true;
+
+                    if (popover && surface?.matches(popover)) {
+                        surface.hidePopover();
+                        return true;
+                    }
+                    if (surface?.matches('dialog[open]')) {
+                        if (typeof surface.requestClose === 'function') surface.requestClose();
+                        else surface.close();
+                        return true;
+                    }
+                    if (!toggle) return false;
+                    toggle.click();
+                    toggle.focus({preventScroll: true});
+                    return true;
+                })()
+                """, dismissed -> {
+            checkingPageBack = false;
+            if (isFinishing() || isDestroyed() || customView != null || addressEditing) return;
+            if (!java.util.Objects.equals(currentUrl, webView.getUrl())) return;
+            if (!"true".equals(dismissed)) goBackInHistory();
+        });
+    }
+
+    private void goBackInHistory() {
+        if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
             showExitConfirmation();
