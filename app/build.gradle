@@ -14,7 +14,7 @@ android {
         applicationId 'com.tvbrowser.tv'
         minSdk 23
         targetSdk 35
-        versionCode 1
+        versionCode 11
         def updateRepo = System.getenv('GITHUB_REPOSITORY') ?: 'nudroid12/TVBrowser'
         resValue 'string', 'update_repo', updateRepo
         versionName '0.0.1'
@@ -42,6 +42,13 @@ android {
         }
     }
 
+    def adapterSources = rootProject.file('tvadapter')
+    if (adapterSources.isDirectory()) {
+        sourceSets {
+            debug.java.srcDir adapterSources
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -49,7 +56,9 @@ android {
 }
 
 androidComponents {
-    beforeVariants(selector().withBuildType('release')) { variant ->
-        variant.enable = false
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1)
+        }
     }
 }
