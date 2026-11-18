@@ -29,6 +29,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.text.InputType;
@@ -86,6 +87,10 @@ public class MainActivity extends Activity {
     private WebView webView;
     private EditText addressBar;
     private LinearLayout toolbar;
+    private View[] toolbarControls;
+    private View lastToolbarFocus;
+    private boolean addressEditing;
+    private boolean addressKeyboardVisible;
     private ProgressBar progressBar;
     private FrameLayout root;
     private FrameLayout fullscreenContainer;
@@ -174,20 +179,50 @@ public class MainActivity extends Activity {
         ImageButton bookmark = iconButton(R.drawable.ic_bookmark, "Bookmark");
         ImageButton menu = iconButton(R.drawable.ic_more, "Menu");
 
-        addressBar = new EditText(this);
+        addressBar = new EditText(this) {
+            @Override
+            public boolean onKeyPreIme(int keyCode, KeyEvent event) {
+                if (keyCode == KeyEvent.KEYCODE_BACK && addressEditing) {
+                    if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
+                        finishAddressEditing();
+                    }
+                    return true;
+                }
+                return super.onKeyPreIme(keyCode, event);
+            }
+        };
         addressBar.setSingleLine(true);
         addressBar.setTextColor(Color.WHITE);
         addressBar.setHintTextColor(Color.LTGRAY);
         addressBar.setHint("Search or enter URL");
         addressBar.setTextSize(16);
-        addressBar.setPadding(dp(13), 0, dp(13), 0);
+        addressBar.setPadding(dp(13), 0, dp(42), 0);
         addressBar.setBackgroundResource(R.drawable.address_bg);
         addressBar.setImeOptions(EditorInfo.IME_ACTION_GO | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         addressBar.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        addressBar.setSelectAllOnFocus(true);
         addressBar.setFocusable(true);
         addressBar.setFocusableInTouchMode(true);
-        addressBar.setShowSoftInputOnFocus(true);
+        addressBar.setShowSoftInputOnFocus(false);
+        addressBar.setCursorVisible(false);
+        addressBar.setOnFocusChangeListener((view, focused) -> {
+            if (!focused && addressEditing) finishAddressEditing();
+        });
+
+        Button clearAddress = button("×");
+        clearAddress.setContentDescription("Clear address");
+        clearAddress.setTextSize(20);
+        clearAddress.setMinWidth(0);
+        clearAddress.setMinimumWidth(0);
+        clearAddress.setPadding(0, 0, 0, 0);
+        clearAddress.setOnClickListener(view -> addressBar.getText().clear());
+
+        FrameLayout addressBox = new FrameLayout(this);
+        addressBox.addView(addressBar, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams clearParams = new FrameLayout.LayoutParams(
+                dp(32), dp(32), Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        clearParams.rightMargin = dp(5);
+        addressBox.addView(clearAddress, clearParams);
 
         ImageButton go = iconButton(R.drawable.ic_go, "Go");
         ImageButton zoomOut = iconButton(R.drawable.ic_zoom_out, "Zoom out");
@@ -201,7 +236,7 @@ public class MainActivity extends Activity {
         toolbar.addView(refresh, fixed(dp(40)));
         LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
         addressParams.setMargins(dp(5), 0, dp(5), 0);
-        toolbar.addView(addressBar, addressParams);
+        toolbar.addView(addressBox, addressParams);
         toolbar.addView(go, fixed(dp(40)));
         toolbar.addView(bookmark, fixed(dp(40)));
         toolbar.addView(zoomOut, fixed(dp(36)));
@@ -226,19 +261,17 @@ public class MainActivity extends Activity {
         webView.setFocusableInTouchMode(true);
         browserFrame.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        int webFocusId = webView.getId();
-        back.setNextFocusDownId(webFocusId);
-        forward.setNextFocusDownId(webFocusId);
-        home.setNextFocusDownId(webFocusId);
-        refresh.setNextFocusDownId(webFocusId);
-        addressBar.setNextFocusDownId(webFocusId);
-        go.setNextFocusDownId(webFocusId);
-        bookmark.setNextFocusDownId(webFocusId);
-        zoomOut.setNextFocusDownId(webFocusId);
-        zoomLabel.setNextFocusDownId(webFocusId);
-        zoomIn.setNextFocusDownId(webFocusId);
-        menu.setNextFocusDownId(webFocusId);
-        webView.setNextFocusUpId(addressBar.getId());
+        toolbarControls = new View[]{back, forward, home, refresh, addressBar, clearAddress,
+                go, bookmark, zoomOut, zoomLabel, zoomIn, menu};
+        for (int i = 0; i < toolbarControls.length; i++) {
+            View control = toolbarControls[i];
+            if (control.getId() == View.NO_ID) control.setId(View.generateViewId());
+            control.setNextFocusDownId(webView.getId());
+            if (i > 0) control.setNextFocusLeftId(toolbarControls[i - 1].getId());
+        }
+        for (int i = 0; i + 1 < toolbarControls.length; i++) {
+            toolbarControls[i].setNextFocusRightId(toolbarControls[i + 1].getId());
+        }
 
         cursorIndicator = new CursorIndicatorView(this);
         cursorIndicator.setVisibility(View.GONE);
@@ -411,6 +444,11 @@ public class MainActivity extends Activity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public void onUnhandledKeyEvent(WebView view, KeyEvent event) {
+                if (!finishWebVerticalNavigation(event)) super.onUnhandledKeyEvent(view, event);
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
                 String scheme = uri.getScheme();
@@ -445,7 +483,7 @@ public class MainActivity extends Activity {
                 pageBlockedRequests.set(0);
                 pageBlockedPopups.set(0);
                 if (url != null && !url.isEmpty()) currentPageUrl = url;
-                addressBar.setText(url);
+                if (!addressEditing) addressBar.setText(url);
                 progressBar.setVisibility(View.VISIBLE);
             }
 
@@ -458,7 +496,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 if (url != null && !url.isEmpty()) currentPageUrl = url;
-                addressBar.setText(url);
+                if (!addressEditing) addressBar.setText(url);
                 recordHistory(url, view.getTitle());
                 injectTvPageOptimisation();
                 view.postDelayed(MainActivity.this::injectTvPageOptimisation, 500);
@@ -723,10 +761,24 @@ public class MainActivity extends Activity {
     private void showSystemKeyboard() {
         if (addressBar == null) return;
         addressBar.requestFocus();
+        if (!addressEditing) {
+            addressEditing = true;
+            addressBar.setCursorVisible(true);
+            addressBar.setSelection(addressBar.length());
+        }
         addressBar.post(() -> {
+            if (!addressEditing || !addressBar.hasFocus()) return;
             InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
             if (imm != null) imm.showSoftInput(addressBar, InputMethodManager.SHOW_IMPLICIT);
         });
+    }
+
+    private void finishAddressEditing() {
+        addressEditing = false;
+        addressKeyboardVisible = false;
+        addressBar.setCursorVisible(false);
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(addressBar.getWindowToken(), 0);
     }
 
     private void hideSystemKeyboard() {
@@ -739,6 +791,14 @@ public class MainActivity extends Activity {
     private void installSafeAreaInsets() {
         if (root == null || pageContainer == null) return;
         root.setOnApplyWindowInsetsListener((v, insets) -> {
+            if (Build.VERSION.SDK_INT >= 30 && addressEditing) {
+                boolean visible = insets.isVisible(WindowInsets.Type.ime());
+                if (addressKeyboardVisible && !visible) {
+                    addressEditing = false;
+                    addressBar.setCursorVisible(false);
+                }
+                addressKeyboardVisible = visible;
+            }
             safeInsetLeft = Math.max(0, insets.getSystemWindowInsetLeft());
             safeInsetRight = Math.max(0, insets.getSystemWindowInsetRight());
             pageContainer.setPadding(safeInsetLeft, 0, safeInsetRight, 0);
@@ -1116,6 +1176,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (addressEditing) {
+            finishAddressEditing();
+            return;
+        }
         browserBack();
     }
 
@@ -1234,8 +1298,7 @@ public class MainActivity extends Activity {
             return;
         }
         View target = getCurrentFocus();
-        if (target == null || target == root) target = webView;
-        if (target == null) return;
+        if (target != webView || target == null) return;
         long now = android.os.SystemClock.uptimeMillis();
         KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0);
         KeyEvent up = new KeyEvent(now, now + 20L, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0);
@@ -1269,31 +1332,59 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    private boolean handleTvVerticalNavigation(KeyEvent event) {
-        int keyCode = event.getKeyCode();
-        if (keyCode != KeyEvent.KEYCODE_DPAD_DOWN && keyCode != KeyEvent.KEYCODE_DPAD_UP) return false;
-        if (cursorMode || customView != null || webView == null || toolbar == null) return false;
-
+    private boolean handleToolbarKey(KeyEvent event) {
+        if (toolbarControls == null || cursorMode || customView != null) return false;
         View focused = getCurrentFocus();
-        if (event.getAction() != KeyEvent.ACTION_DOWN) return focused == webView;
+        for (int index = 0; index < toolbarControls.length; index++) {
+            if (focused != toolbarControls[index]) continue;
+            if (isRemoteOkKey(event)) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    pendingSingleOk = false;
+                    inputHandler.removeCallbacks(pendingSingleOkRunnable);
+                    focused.performClick();
+                }
+                return true;
+            }
+            if (addressEditing) return false;
 
-        if (focused != webView) {
-            return keyCode == KeyEvent.KEYCODE_DPAD_DOWN
-                    && focused != null && focused.getParent() == toolbar
-                    && webView.requestFocus(View.FOCUS_DOWN);
+            int key = event.getKeyCode();
+            if (key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                int next = index + (key == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1);
+                if (event.getAction() == KeyEvent.ACTION_DOWN && next >= 0 && next < toolbarControls.length) {
+                    toolbarControls[next].requestFocus();
+                }
+                return true;
+            }
+            if (key == KeyEvent.KEYCODE_DPAD_DOWN && event.getAction() == KeyEvent.ACTION_DOWN) {
+                lastToolbarFocus = focused;
+                return webView.requestFocus(View.FOCUS_DOWN);
+            }
+            return false;
         }
+        return false;
+    }
 
-        if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+    private boolean finishWebVerticalNavigation(KeyEvent event) {
+        if (cursorMode || customView != null || webView == null || getCurrentFocus() != webView) return false;
+        int key = event.getKeyCode();
+        if (key != KeyEvent.KEYCODE_DPAD_UP && key != KeyEvent.KEYCODE_DPAD_DOWN) return false;
+        if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+
+        if (key == KeyEvent.KEYCODE_DPAD_DOWN) {
             webView.pageDown(false);
         } else if (!webView.pageUp(false)) {
-            addressBar.requestFocus(View.FOCUS_UP);
+            if (lastToolbarFocus == null || !lastToolbarFocus.requestFocus(View.FOCUS_UP)) {
+                addressBar.requestFocus(View.FOCUS_UP);
+            }
         }
         return true;
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (handleOkModeToggle(event)) return true;
+        if (handleToolbarKey(event)) return true;
+        if (webView != null && customView == null
+                && (cursorMode || getCurrentFocus() == webView) && handleOkModeToggle(event)) return true;
 
         int keyCode = event.getKeyCode();
         if (cursorMode && isArrowKey(keyCode)) {
@@ -1301,7 +1392,10 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        if (handleTvVerticalNavigation(event)) return true;
+        if (webView != null && customView == null && getCurrentFocus() == webView
+                && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN)) {
+            return webView.dispatchKeyEvent(event) || finishWebVerticalNavigation(event);
+        }
 
         if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_MENU) {
             showSettings();
