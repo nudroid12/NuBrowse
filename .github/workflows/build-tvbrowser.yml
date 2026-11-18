@@ -15,9 +15,11 @@ on:
     branches: [main]
     paths:
       - 'app/**'
+      - 'tvadapter/**'
       - 'build.gradle'
       - 'settings.gradle'
       - 'gradle.properties'
+      - '.github/workflows/build-tvbrowser.yml'
   workflow_run:
     workflows: [TVBrowser Apply ZIP Patch]
     types: [completed]
@@ -29,14 +31,13 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 25
-    env:
-      PUBLISH_DEBUG: ${{ inputs.publish_debug || false }}
     outputs:
       tag: ${{ steps.release.outputs.tag }}
-      asset: ${{ steps.release.outputs.asset }}
+      asset: ${{ steps.release.outputs.release_asset }}
+      debug_asset: ${{ steps.release.outputs.debug_asset }}
     steps:
       - name: Get applied commit
         if: github.event_name == 'workflow_run'
@@ -154,20 +155,7 @@ jobs:
             echo "Blocklist download unavailable. Using bundled fallback rules."
           fi
 
-      - name: Build debug APK
-        if: ${{ !inputs.publish && !inputs.publish_debug }}
-        run: |
-          gradle --no-daemon --stacktrace assembleDebug
-          cp app/build/outputs/apk/debug/app-debug.apk TVBrowser-debug.apk
-      - name: Upload debug APK
-        if: ${{ !inputs.publish && !inputs.publish_debug }}
-        uses: actions/upload-artifact@v5
-        with:
-          name: TVBrowser-debug
-          path: TVBrowser-debug.apk
-          if-no-files-found: error
-      - name: Build signed APK
-        if: (inputs.publish || inputs.publish_debug) && github.ref == 'refs/heads/main'
+      - name: Build signed debug and release APKs
         id: release
         env:
           KEYSTORE_BASE64: ${{ secrets.TVBROWSER_KEYSTORE_BASE64 }}
@@ -175,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "$KEYSTORE_BASE64" || -z "$TVBROWSER_KEYSTORE_PASSWORD" ]]; then
-            echo "::error::Configure the TVBrowser signing secrets before publishing."
+            echo "::error::Configure the TVBrowser signing secrets before building."
             exit 1
           fi
           umask 077
@@ -218,41 +206,42 @@ jobs:
           JAVA
           TVBROWSER_KEY_ALIAS="$(java "$key_reader/ReadSigningAlias.java" "$TVBROWSER_KEYSTORE_FILE")"
           export TVBROWSER_KEY_ALIAS
-          variant=release
-          task=assembleRelease
-          package=com.tvbrowser.tv
-          prefix=TVBrowser
-          if [[ "$PUBLISH_DEBUG" == true ]]; then
-            variant=debug
-            task=assembleDebug
-            package=com.tvbrowser.tv.debug
-            prefix=TVBrowser-debug
-          fi
-          gradle --no-daemon --stacktrace "$task"
-          apk="app/build/outputs/apk/$variant/app-$variant.apk"
-          tools="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?Android SDK unavailable}}/build-tools/36.0.0"
-          "$tools/apksigner" verify "$apk"
-          metadata="$("$tools/aapt" dump badging "$apk")"
-          package_line="${metadata%%$'\n'*}"
-          [[ "$package_line" == "package: name='$package' "* ]]
-          code="$(sed -nE "s/.* versionCode='([0-9]+)'.*/\1/p" <<< "$package_line")"
-          version="$(sed -nE "s/.* versionName='([0-9]+\.[0-9]+\.[0-9]+)'.*/\1/p" <<< "$package_line")"
-          [[ "$code" =~ ^[1-9][0-9]{0,8}$ && -n "$version" ]]
-          asset="$prefix-$code.apk"
-          cp "$apk" "$asset"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          echo "asset=$asset" >> "$GITHUB_OUTPUT"
-      - name: Upload signed APK
-        if: (inputs.publish || inputs.publish_debug) && github.ref == 'refs/heads/main'
+          gradle --no-daemon --stacktrace assembleDebug assembleRelease
+          for variant in debug release; do
+            package=com.tvbrowser.tv
+            prefix=TVBrowser
+            if [[ "$variant" == debug ]]; then
+              package=com.tvbrowser.tv.debug
+              prefix=TVBrowser-debug
+            fi
+            apk="app/build/outputs/apk/$variant/app-$variant.apk"
+            tools="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?Android SDK unavailable}}/build-tools/36.0.0"
+            "$tools/apksigner" verify "$apk"
+            metadata="$("$tools/aapt" dump badging "$apk")"
+            package_line="${metadata%%$'\n'*}"
+            [[ "$package_line" == "package: name='$package' "* ]]
+            code="$(sed -nE "s/.* versionCode='([0-9]+)'.*/\1/p" <<< "$package_line")"
+            version="$(sed -nE "s/.* versionName='([0-9]+\.[0-9]+\.[0-9]+)'.*/\1/p" <<< "$package_line")"
+            [[ "$code" =~ ^[1-9][0-9]{0,8}$ && -n "$version" ]]
+            asset="$prefix-$code.apk"
+            cp "$apk" "$asset"
+            if [[ "$variant" == release ]]; then
+              echo "tag=v$version" >> "$GITHUB_OUTPUT"
+            fi
+            echo "${variant}_asset=$asset" >> "$GITHUB_OUTPUT"
+          done
+      - name: Upload signed APKs
         uses: actions/upload-artifact@v5
         with:
           name: TVBrowser-signed
-          path: ${{ steps.release.outputs.asset }}
+          path: |
+            ${{ steps.release.outputs.debug_asset }}
+            ${{ steps.release.outputs.release_asset }}
           if-no-files-found: error
 
   publish:
     needs: build
-    if: inputs.publish && !inputs.publish_debug && github.ref == 'refs/heads/main'
+    if: inputs.publish && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -303,7 +292,7 @@ jobs:
       - name: Publish debug update
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET: ${{ needs.build.outputs.asset }}
+          ASSET: ${{ needs.build.outputs.debug_asset }}
         run: |
           set -euo pipefail
           [[ "$ASSET" =~ ^TVBrowser-debug-[1-9][0-9]{0,8}[.]apk$ ]]
