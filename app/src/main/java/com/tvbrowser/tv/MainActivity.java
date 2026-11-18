@@ -94,6 +94,8 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private FrameLayout root;
     private FrameLayout fullscreenContainer;
+    private View focusBeforeFullscreen;
+    private int pageFocusabilityBeforeFullscreen;
     private FrameLayout browserFrame;
     private Button zoomLabel;
     private CursorIndicatorView cursorIndicator;
@@ -593,11 +595,21 @@ public class MainActivity extends Activity {
                     callback.onCustomViewHidden();
                     return;
                 }
+                focusBeforeFullscreen = getCurrentFocus();
                 hideSystemKeyboard();
+                cancelPendingOk();
+                if (cursorIndicator != null) {
+                    cursorIndicator.removeCallbacks(hideCursorRunnable);
+                    cursorIndicator.setVisibility(View.INVISIBLE);
+                }
                 customView = view;
                 customViewCallback = callback;
                 fullscreenContainer = new FrameLayout(MainActivity.this);
                 fullscreenContainer.setBackgroundColor(Color.BLACK);
+                fullscreenContainer.setFocusableInTouchMode(true);
+                fullscreenContainer.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+                pageFocusabilityBeforeFullscreen = pageContainer.getDescendantFocusability();
+                pageContainer.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
                 fullscreenContainer.addView(view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                 root.addView(fullscreenContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -1230,12 +1242,18 @@ public class MainActivity extends Activity {
         if (customView == null) return;
         root.removeView(fullscreenContainer);
         fullscreenContainer = null;
+        pageContainer.setDescendantFocusability(pageFocusabilityBeforeFullscreen);
         customView = null;
         if (customViewCallback != null) customViewCallback.onCustomViewHidden();
         customViewCallback = null;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         exitImmersiveMode();
-        webView.requestFocus();
+        View previousFocus = focusBeforeFullscreen;
+        focusBeforeFullscreen = null;
+        if (previousFocus == null || !previousFocus.isShown() || !previousFocus.requestFocus()) {
+            webView.requestFocus();
+        }
+        showCursor();
     }
 
     @Override
@@ -1258,11 +1276,15 @@ public class MainActivity extends Activity {
                 (event.getSource() & InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD;
     }
 
-    private void toggleCursorMode() {
-        cursorMode = !cursorMode;
+    private void cancelPendingOk() {
         pendingSingleOk = false;
         inputHandler.removeCallbacks(pendingSingleOkRunnable);
         lastOkTapAt = 0L;
+    }
+
+    private void toggleCursorMode() {
+        cursorMode = !cursorMode;
+        cancelPendingOk();
         if (cursorMode) {
             initialiseCursorIfNeeded();
             showCursor();
@@ -1382,9 +1404,6 @@ public class MainActivity extends Activity {
 
         long now = event.getEventTime();
         if (pendingSingleOk && now - lastOkTapAt > 0 && now - lastOkTapAt <= OK_DOUBLE_TAP_MS) {
-            pendingSingleOk = false;
-            inputHandler.removeCallbacks(pendingSingleOkRunnable);
-            lastOkTapAt = 0L;
             toggleCursorMode();
             return true;
         }
@@ -1397,14 +1416,13 @@ public class MainActivity extends Activity {
     }
 
     private boolean handleToolbarKey(KeyEvent event) {
-        if (toolbarControls == null || cursorMode || customView != null) return false;
+        if (toolbarControls == null || cursorMode) return false;
         View focused = getCurrentFocus();
         for (int index = 0; index < toolbarControls.length; index++) {
             if (focused != toolbarControls[index]) continue;
             if (isRemoteOkKey(event)) {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
-                    pendingSingleOk = false;
-                    inputHandler.removeCallbacks(pendingSingleOkRunnable);
+                    cancelPendingOk();
                     focused.performClick();
                 }
                 return true;
@@ -1429,7 +1447,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean finishWebVerticalNavigation(KeyEvent event) {
-        if (cursorMode || customView != null || webView == null || getCurrentFocus() != webView) return false;
+        if (cursorMode || webView == null || getCurrentFocus() != webView) return false;
         int key = event.getKeyCode();
         if (key != KeyEvent.KEYCODE_DPAD_UP && key != KeyEvent.KEYCODE_DPAD_DOWN) return false;
         if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
@@ -1446,8 +1464,9 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (customView != null) return super.dispatchKeyEvent(event);
         if (handleToolbarKey(event)) return true;
-        if (webView != null && customView == null
+        if (webView != null
                 && (cursorMode || getCurrentFocus() == webView) && handleOkModeToggle(event)) return true;
 
         int keyCode = event.getKeyCode();
@@ -1456,7 +1475,7 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        if (webView != null && customView == null && getCurrentFocus() == webView
+        if (webView != null && getCurrentFocus() == webView
                 && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN)) {
             return webView.dispatchKeyEvent(event) || finishWebVerticalNavigation(event);
         }
@@ -1477,8 +1496,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         updater.close();
-        pendingSingleOk = false;
-        inputHandler.removeCallbacks(pendingSingleOkRunnable);
+        cancelPendingOk();
         if (webView != null) {
             webView.loadUrl("about:blank");
             webView.stopLoading();
