@@ -2,15 +2,6 @@ name: TVBrowser Build
 
 on:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: Build a signed APK and publish it to GitHub Releases
-        type: boolean
-        default: false
-      publish_debug:
-        description: Publish a signed debug APK to the debug update channel
-        type: boolean
-        default: false
   push:
     branches: [main]
     paths:
@@ -35,6 +26,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     outputs:
+      revision: ${{ steps.revision.outputs.sha }}
       tag: ${{ steps.release.outputs.tag }}
       asset: ${{ steps.release.outputs.release_asset }}
       debug_asset: ${{ steps.release.outputs.debug_asset }}
@@ -241,7 +233,7 @@ jobs:
 
   publish:
     needs: build
-    if: inputs.publish && github.ref == 'refs/heads/main'
+    concurrency: tvbrowser-release-updates
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -252,6 +244,7 @@ jobs:
       - name: Publish signed APK
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_SHA: ${{ needs.build.outputs.revision }}
           TAG: ${{ needs.build.outputs.tag }}
           ASSET: ${{ needs.build.outputs.asset }}
         run: |
@@ -275,12 +268,28 @@ jobs:
                   "downloadUrl": f"https://github.com/{repo}/releases/download/{tag}/{apk}",
               }, output)
           PYFEED
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets > published.json; then
+            if jq -e --arg name "$ASSET" 'any(.assets[]; .name == $name)' published.json >/dev/null; then
+              echo "$ASSET is already published."
+              exit 0
+            fi
+            echo "::error::Tag $TAG already exists with different assets. Bump versionName for the next release."
+            exit 1
+          fi
+          latest_asset=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq             '.assets[].name | select(test("^TVBrowser-[0-9]+[.]apk$"))' 2>/dev/null || true)
+          if [[ "$latest_asset" =~ ^TVBrowser-([0-9]+)[.]apk$ ]]; then
+            new_code=${ASSET#TVBrowser-}
+            new_code=${new_code%.apk}
+            if (( 10#$new_code <= 10#${BASH_REMATCH[1]} )); then
+              echo "A release with the same or higher versionCode is already published."
+              exit 0
+            fi
+          fi
           gh release create "$TAG" "$ASSET" update.json --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" --title "TVBrowser $TAG" --generate-notes --latest
+            --target "$BUILD_SHA" --title "TVBrowser $TAG" --generate-notes --latest
 
   publish-debug:
     needs: build
-    if: inputs.publish_debug && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     concurrency: tvbrowser-debug-updates
     permissions:
@@ -292,13 +301,18 @@ jobs:
       - name: Publish debug update
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_SHA: ${{ needs.build.outputs.revision }}
           ASSET: ${{ needs.build.outputs.debug_asset }}
         run: |
           set -euo pipefail
           [[ "$ASSET" =~ ^TVBrowser-debug-[1-9][0-9]{0,8}[.]apk$ ]]
-          if gh release view debug-updates --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view debug-updates --repo "$GITHUB_REPOSITORY" --json assets > published.json; then
+            if jq -e --arg name "$ASSET" 'any(.assets[]; .name == $name)' published.json >/dev/null; then
+              echo "$ASSET is already published."
+              exit 0
+            fi
             gh release upload debug-updates "$ASSET" --repo "$GITHUB_REPOSITORY"
           else
             gh release create debug-updates "$ASSET" --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" --title "TVBrowser Debug Updates" --prerelease --latest=false
+              --target "$BUILD_SHA" --title "TVBrowser Debug Updates" --prerelease --latest=false
           fi
